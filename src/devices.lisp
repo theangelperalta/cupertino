@@ -8,14 +8,14 @@
 ;; - device pairs - TODO
 
 (defun print-sim-info ()
-   (let ((sim-devices-info (list-xcode-sim-info)))
+   (let ((sim-devices-info (list-sim-info)))
     (when sim-devices-info
        (progn
        (print-sim-device-types sim-devices-info)
        (print-sim-runtimes sim-devices-info)
        (print-sim-devices sim-devices-info)))))
 
-(defun list-xcode-sim-info ()
+(defun list-sim-info ()
   "Executes 'xcrun simctl list --json' and returns the parsed Lisp object. Returns results for all of simualtor devices and runtimes available."
   (let* ((command '("xcrun" "simctl" "list" "--json"))
          (output-string (uiop:run-program command :output :string :ignore-error-status t)))
