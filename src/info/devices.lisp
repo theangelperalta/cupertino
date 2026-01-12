@@ -16,7 +16,7 @@
        (print-sim-devices sim-devices-info)))))
 
 (defun list-sim-info ()
-  "Executes 'xcrun simctl list --json' and returns the parsed Lisp object. Returns results for all of simualtor devices and runtimes available."
+  "Executes 'xcrun simctl list --json' and returns results for all of simualtor devices and runtimes available."
   (let* ((command '("xcrun" "simctl" "list" "--json"))
          (output-string (uiop:run-program command :output :string :ignore-error-status t)))
     (handler-case

@@ -1,4 +1,4 @@
-(in-package :cupertino)
+ (in-package :cupertino)
 
 (defun greet/options ()
   "Returns the options for the `greet' command"
