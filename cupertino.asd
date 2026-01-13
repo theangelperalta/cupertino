@@ -18,7 +18,8 @@
                #:str)
   :components (
                (:file "utils")
-               (:file "devices")
+               (:file "info/devices")
+               (:file "info/project")
                (:file "cli")
                (:file "main")))
 

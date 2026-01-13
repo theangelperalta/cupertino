@@ -2,22 +2,18 @@
 
 ;; Scheme
 
-(defun list-sim-info ()
-  "Executes 'xcrun simctl list --json' and returns the parsed Lisp object. Returns results for all of simualtor devices and runtimes available."
-  (let* ((command '("xcrun" "simctl" "list" "--json"))
-         (output-string (uiop:run-program command :output :string :ignore-error-status t)))
-    (handler-case
-        (yason:parse output-string)
-      (error (e)
-        (format *error-output* "Error parsing JSON output: ~a~%" e)
-        nil))))
+(defun print-project-info (workspace)
+  (progn
+  (format t "Schemes in workspace: ~a~%~%" workspace)
+  (dolist (scheme (list-project-schemes workspace))
+  (format t "~A~%" scheme))))
 
 (defun list-project-schemes (workspace)
   "Executes xcodebuild -list  and returns a schemes in project or workspace"
   (let* ((command (format nil "xcodebuild -list -workspace ~a" workspace))
          (output-string (uiop:run-program command :output :string :ignore-error-status t))
          (schemes (parse-schemes (read-lines-from-string output-string))))
-    (format t "~a~%" schemes)))
+    schemes))
 
 (defun trim (str)
   (string-trim '(#\Space #\Tab #\Newline #\Return) str))

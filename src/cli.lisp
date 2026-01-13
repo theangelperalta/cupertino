@@ -3,6 +3,7 @@
 (defun info/top-level/sub-commands ()
   "Returns the list of sub-commands for the top-level command"
   (list
+   (info/project/command)
    (info/sim/command)
    (info/device/command)))
 
@@ -30,6 +31,34 @@
     :initial-value "stranger"
     :env-vars '("USER")
     :key :user)))
+
+
+(defun info/project/options ()
+  "Returns the options for the `info' command"
+  (list
+   (clingon:make-option
+    :string
+    :description "project file (e.g., HelloWorld.xcodeproj)"
+    :short-name #\p
+    :long-name "project-name"
+    :key :project)))
+
+
+(defun info/project/handler (cmd)
+  "Handler for the `device/info' command"
+  (let ((project (clingon:getopt cmd :project)))
+    (if project
+        (print-project-info project)
+        (clingon:print-usage-and-exit cmd t))))
+
+(defun info/project/command ()
+  "A command to display physical device information"
+  (clingon:make-command
+   :name "project"
+   :description "Display project information"
+   :options (info/project/options)
+   :handler #'info/project/handler))
+
 
 (defun info/sim/handler (cmd)
   "Handler for the `sim/info' command"
