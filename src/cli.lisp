@@ -34,22 +34,35 @@
 
 
 (defun info/project/options ()
-  "Returns the options for the `info' command"
   (list
    (clingon:make-option
     :string
     :description "project file (e.g., HelloWorld.xcodeproj)"
     :short-name #\p
-    :long-name "project-name"
+    :long-name "project"
     :key :project)))
 
+(defun info/workspace/options ()
+  (list
+   (clingon:make-option
+    :string
+    :description "workspace file (e.g., HelloWorld.xcworkspace)"
+    :short-name #\w
+    :long-name "workspace"
+    :key :workspace)))
 
 (defun info/project/handler (cmd)
   "Handler for the `device/info' command"
-  (let ((project (clingon:getopt cmd :project)))
-    (if project
-        (print-project-info project)
-        (clingon:print-usage-and-exit cmd t))))
+  (let* ((path (first (clingon:command-arguments cmd)))
+         (project-file-type (get-project-file-type path))
+        (project (clingon:getopt cmd :project))
+        (workspace (clingon:getopt cmd :workspace)))
+    (if (and project workspace)
+        "Error: You cannot specify both an Xcode project and a workspace."
+        (cond (project (print-project-info ':project project))
+        (workspace (print-project-info ':workspace workspace))
+        (project-file-type (print-project-info project-file-type path))
+        (t (clingon:print-usage-and-exit cmd t))))))
 
 (defun info/project/command ()
   "A command to display physical device information"

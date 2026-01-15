@@ -2,15 +2,25 @@
 
 ;; Scheme
 
-(defun print-project-info (workspace)
+(defun get-project-file-type (path)
+  (cond ((str:ends-with-p ".xcodeproj" path) ':project)
+        ((str:ends-with-p ".xcworkspace" path) ':workspace)
+        (t nil)))
+
+(defun get-project-file-type-str (type)
+  (cond ((equal type ':project) "project")
+        ((equal type ':workspace) "workspace")
+        (t nil)))
+
+(defun print-project-info (target-type target-path)
   (progn
-  (format t "Schemes in workspace: ~a~%~%" workspace)
-  (dolist (scheme (list-project-schemes workspace))
+  (format t "Schemes in ~a: ~a~%~%" (get-project-file-type-str target-type) target-path)
+  (dolist (scheme (list-project-schemes target-type target-path))
   (format t "~A~%" scheme))))
 
-(defun list-project-schemes (workspace)
+(defun list-project-schemes (target-type target-path)
   "Executes xcodebuild -list  and returns a schemes in project or workspace"
-  (let* ((command (format nil "xcodebuild -list -workspace ~a" workspace))
+  (let* ((command (format nil "xcodebuild -list -~a ~a" (get-project-file-type-str target-type) target-path))
          (output-string (uiop:run-program command :output :string :ignore-error-status t))
          (schemes (parse-schemes (read-lines-from-string output-string))))
     schemes))
