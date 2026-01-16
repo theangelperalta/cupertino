@@ -40,10 +40,7 @@
     :description "project file (e.g., HelloWorld.xcodeproj)"
     :short-name #\p
     :long-name "project"
-    :key :project)))
-
-(defun info/workspace/options ()
-  (list
+    :key :project)
    (clingon:make-option
     :string
     :description "workspace file (e.g., HelloWorld.xcworkspace)"
