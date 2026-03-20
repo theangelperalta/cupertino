@@ -22,15 +22,7 @@
 
 (defun info/top-level/options ()
   "Returns the options for the `info' command"
-  (list
-   (clingon:make-option
-    :string
-    :description "Person to greet"
-    :short-name #\u
-    :long-name "user"
-    :initial-value "stranger"
-    :env-vars '("USER")
-    :key :user)))
+  (list))
 
 
 (defun info/project/options ()
@@ -55,7 +47,7 @@
         (project (clingon:getopt cmd :project))
         (workspace (clingon:getopt cmd :workspace)))
     (if (and project workspace)
-        "Error: You cannot specify both an Xcode project and a workspace."
+        (format *error-output* "Error: You cannot specify both an Xcode project and a workspace.~%")
         (cond (project (print-project-info ':project project))
         (workspace (print-project-info ':workspace workspace))
         (project-file-type (print-project-info project-file-type path))
@@ -72,20 +64,20 @@
 
 (defun info/sim/handler (cmd)
   "Handler for the `sim/info' command"
-  (let ((who (clingon:getopt cmd :user)))
-    (print-sim-info)))
+  (declare (ignore cmd))
+  (print-sim-info))
 
 (defun info/sim/command ()
   "A command to display simulator device information"
   (clingon:make-command
    :name "sim"
-   :description "Display simualtor device information"
+   :description "Display simulator device information"
    :handler #'info/sim/handler))
 
 (defun info/device/handler (cmd)
   "Handler for the `device/info' command"
-  (let ((who (clingon:getopt cmd :user)))
-    (print-device-info)))
+  (declare (ignore cmd))
+  (print-device-info))
 
 (defun info/device/command ()
   "A command to display physical device information"

@@ -12,18 +12,24 @@
   :serial t
   :depends-on (#:uiop
                #:alexandria
+               #:bordeaux-threads
                #:clingon
                #:cl-ppcre
                #:yason
                #:str)
   :components (
+               (:file "common/package")
+               (:file "common/model-interface")
+               (:file "model/package")
+               (:file "model/model")
+               (:file "package")
                (:file "utils")
                (:file "info/devices")
                (:file "info/project")
+               (:file "xcode-tools")
+               (:file "build")
+               (:file "test")
+               (:file "clean")
                (:file "cli")
                (:file "main")))
 
-
-(defpackage :cupertino
-  (:use #:cl)
-  (:export #:main))

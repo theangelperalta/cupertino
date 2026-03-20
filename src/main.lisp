@@ -1,29 +1,40 @@
  (in-package :cupertino)
 
-(defun greet/options ()
-  "Returns the options for the `greet' command"
-  (list
-   (clingon:make-option
-    :string
-    :description "Person to greet"
-    :short-name #\u
-    :long-name "user"
-    :initial-value "stranger"
-    :env-vars '("USER")
-    :key :user)))
+(defun build/options ()
+  "Returns the options for the `build' command"
+  (xcodebuild-options "build"))
 
-(defun greet/handler (cmd)
-  "Handler for the `greet' command"
-  (let ((who (clingon:getopt cmd :user)))
-    (format t "Hello, ~A!~%" who)))
-
-(defun greet/command ()
-  "A command to greet someone"
+(defun build/command ()
+  "A command to build the Xcode project"
   (clingon:make-command
-   :name "greet"
-   :description "greets people"
-   :options (greet/options)
-   :handler #'greet/handler))
+   :name "build"
+   :description "Build the Xcode project"
+   :options (build/options)
+   :handler #'build/handler))
+
+(defun test/options ()
+  "Returns the options for the `test' command"
+  (xcodebuild-options "test"))
+
+(defun test/command ()
+  "A command to test the Xcode project"
+  (clingon:make-command
+   :name "test"
+   :description "Run tests for the Xcode project"
+   :options (test/options)
+   :handler #'test/handler))
+
+(defun clean/options ()
+  "Returns the options for the `clean' command"
+  (xcodebuild-options "clean"))
+
+(defun clean/command ()
+  "A command to clean the Xcode project"
+  (clingon:make-command
+   :name "clean"
+   :description "Clean the Xcode project"
+   :options (clean/options)
+   :handler #'clean/handler))
 
 (defun dot/command ()
   "Returns the command for the `dot' command"
@@ -38,11 +49,6 @@
 (defun top-level/options ()
   "Returns the options for the top-level command"
   (list
-   (clingon:make-option :string
-                        :long-name "persistent-opt"
-                        :description "example persistent option"
-                        :persistent t
-                        :key :persistent-opt)
    (clingon:make-option :counter
                         :description "how noisy we want to be"
                         :short-name #\v
@@ -53,7 +59,9 @@
   "Returns the list of sub-commands for the top-level command"
   (list
    (info/top-level/command)
-   (greet/command)))
+   (build/command)
+   (test/command)
+   (clean/command)))
 
 (defun top-level/handler (cmd)
   "The handler for the top-level command. Will print the usage of the app"
@@ -72,7 +80,7 @@
                         :sub-commands (top-level/sub-commands)))
 
 (defun main (&rest argv)
-  (declare (ignorable argv))
   "Entry point for CLI tool"
+  (declare (ignorable argv))
   (let ((app (top-level/command)))
     (clingon:run app)))
