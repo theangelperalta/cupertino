@@ -1,40 +1,13 @@
  (in-package :cupertino)
 
-(defun build/options ()
-  "Returns the options for the `build' command"
-  (xcodebuild-options "build"))
-
-(defun build/command ()
-  "A command to build the Xcode project"
-  (clingon:make-command
-   :name "build"
-   :description "Build the Xcode project"
-   :options (build/options)
-   :handler #'build/handler))
-
-(defun test/options ()
-  "Returns the options for the `test' command"
-  (xcodebuild-options "test"))
-
-(defun test/command ()
-  "A command to test the Xcode project"
-  (clingon:make-command
-   :name "test"
-   :description "Run tests for the Xcode project"
-   :options (test/options)
-   :handler #'test/handler))
-
-(defun clean/options ()
-  "Returns the options for the `clean' command"
-  (xcodebuild-options "clean"))
-
-(defun clean/command ()
-  "A command to clean the Xcode project"
-  (clingon:make-command
-   :name "clean"
-   :description "Clean the Xcode project"
-   :options (clean/options)
-   :handler #'clean/handler))
+(defun top-level/sub-commands ()
+  "Returns the list of sub-commands for the top-level command"
+  (list
+   (info/top-level/command)
+   (make-xcodebuild-command "build" "Build the Xcode project")
+   (make-xcodebuild-command "test" "Run tests for the Xcode project"
+                            :scheme-accessors (list #'model-test-scheme #'model-scheme))
+   (make-xcodebuild-command "clean" "Clean the Xcode project")))
 
 (defun dot/command ()
   "Returns the command for the `dot' command"
@@ -54,14 +27,6 @@
                         :short-name #\v
                         :long-name "verbose"
                         :key :verbose)))
-
-(defun top-level/sub-commands ()
-  "Returns the list of sub-commands for the top-level command"
-  (list
-   (info/top-level/command)
-   (build/command)
-   (test/command)
-   (clean/command)))
 
 (defun top-level/handler (cmd)
   "The handler for the top-level command. Will print the usage of the app"

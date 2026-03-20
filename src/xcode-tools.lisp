@@ -26,13 +26,16 @@
        (format nil "-project '~A'" project-path))
       (t ""))))
 
-(defun run-xcodebuild (cmd scheme action)
-  "Run xcodebuild with the given scheme and action (build, test, etc.)."
+(defun run-xcodebuild (cmd action &key (scheme-accessors (list #'model-scheme)))
+  "Run xcodebuild with the given action (build, test, clean, etc.).
+Resolves the scheme from CLI options or model accessors in order."
   (let* ((path (first (clingon:command-arguments cmd)))
          (model (model:make-cupertino-model path))
          (project-flag (resolve-project-flag cmd model))
          (destination (resolve-destination cmd model))
-         (configuration (clingon:getopt cmd :configuration)))
+         (configuration (clingon:getopt cmd :configuration))
+         (scheme (or (clingon:getopt cmd :scheme)
+                     (some (lambda (fn) (funcall fn model)) scheme-accessors))))
     (unless scheme
       (format *error-output* "Error: No scheme specified and no default scheme configured.~%")
       (clingon:print-usage-and-exit cmd t))
@@ -40,6 +43,14 @@
                            project-flag scheme destination configuration action)))
       (format t "Running: ~A~%" cmd-str)
       (uiop:run-program cmd-str :output :interactive :error-output :interactive))))
+
+(defun make-xcodebuild-command (name description &key (scheme-accessors (list #'model-scheme)))
+  "Create a clingon command that runs xcodebuild with the given action."
+  (clingon:make-command
+   :name name
+   :description description
+   :options (xcodebuild-options name)
+   :handler (lambda (cmd) (run-xcodebuild cmd name :scheme-accessors scheme-accessors))))
 
 (defun xcodebuild-options (action-description)
   "Return common xcodebuild CLI options with ACTION-DESCRIPTION for the scheme."
