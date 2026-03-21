@@ -7,7 +7,8 @@
    (make-xcodebuild-command "build" "Build the Xcode project")
    (make-xcodebuild-command "test" "Run tests for the Xcode project"
                             :scheme-accessors (list #'model-test-scheme #'model-scheme))
-   (make-xcodebuild-command "clean" "Clean the Xcode project")))
+   (make-xcodebuild-command "clean" "Clean the Xcode project")
+   (install/command)))
 
 (defun dot/command ()
   "Returns the command for the `dot' command"

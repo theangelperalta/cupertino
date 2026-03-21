@@ -5,13 +5,12 @@
   (let ((sim (clingon:getopt cmd :sim))
         (device (clingon:getopt cmd :device)))
     (cond
-      (sim (format nil "platform=iOS Simulator,name=~A" sim))
-      (device (format nil "id=~A" device))
+      (sim (format nil "platform=iOS Simulator,id=~A" sim))
+      (device "generic/platform=iOS")
       ((model-sim model)
-       (format nil "platform=iOS Simulator,name=~A" (model-sim model)))
-      ((model-device model)
-       (format nil "id=~A" (model-device model)))
-      (t "platform=iOS Simulator,name=iPhone 16 Pro"))))
+       (format nil "platform=iOS Simulator,id=~A" (model-sim model)))
+      ((model-device model) "generic/platform=iOS")
+      (t nil))))
 
 (defun resolve-project-flag (cmd model)
   "Resolve the -workspace/-project flag from CLI path or model."
@@ -39,6 +38,9 @@ Resolves the scheme from CLI options or model accessors in order."
     (unless scheme
       (format *error-output* "Error: No scheme specified and no default scheme configured.~%")
       (clingon:print-usage-and-exit cmd t))
+    (unless destination
+      (format *error-output* "Error: No simulator or device specified and none configured.~%")
+      (clingon:print-usage-and-exit cmd t))
     (let ((cmd-str (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A ~A"
                            project-flag scheme destination configuration action)))
       (format t "Running: ~A~%" cmd-str)
@@ -63,7 +65,7 @@ Resolves the scheme from CLI options or model accessors in order."
     :key :scheme)
    (clingon:make-option
     :string
-    :description "simulator destination (e.g., \"iPhone 16 Pro\")"
+    :description "simulator UDID destination"
     :long-name "sim"
     :key :sim)
    (clingon:make-option

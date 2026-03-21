@@ -27,6 +27,7 @@
                (:file "info/devices")
                (:file "info/project")
                (:file "xcode-tools")
+               (:file "install")
                (:file "cli")
                (:file "main")))
 

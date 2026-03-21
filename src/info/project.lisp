@@ -65,7 +65,7 @@
                          (declare (ignore platform))
                          (dolist (d device-list)
                            (when (string-equal (gethash "state" d) "Booted")
-                             (setf sim (gethash "name" d))
+                             (setf sim (gethash "udid" d))
                              (return-from find-sim))))
                        devices)
               (unless sim
@@ -74,7 +74,7 @@
                            (dolist (d device-list)
                              (when (and (gethash "isAvailable" d)
                                         (not (gethash "availabilityError" d)))
-                               (setf sim (gethash "name" d))
+                               (setf sim (gethash "udid" d))
                                (return-from find-sim))))
                          devices)))))))
     (list :project-type target-type
