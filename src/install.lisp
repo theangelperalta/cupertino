@@ -13,6 +13,11 @@
                      xcworkspace-flag scheme configuration sdk)))
     (uiop:run-program cmd :output :string :error-output nil)))
 
+(defun run-interactive (label cmd-str)
+  "Print LABEL with CMD-STR then run CMD-STR with interactive I/O."
+  (format t "~A: ~A~%" label cmd-str)
+  (uiop:run-program cmd-str :output :interactive :error-output :interactive))
+
 (defun resolve-sim-udid (cmd model)
   "Resolve the simulator UDID from CLI options or model."
   (or (clingon:getopt cmd :sim)
@@ -43,17 +48,14 @@
 (defun install-to-simulator (udid app-path)
   "Boot the simulator if needed, then install an app bundle via xcrun simctl."
   (boot-simulator udid)
-  (let ((cmd-str (format nil "xcrun simctl install '~A' '~A'"
-                         udid (namestring app-path))))
-    (format t "Installing to simulator: ~A~%" cmd-str)
-    (uiop:run-program cmd-str :output :interactive :error-output :interactive)))
+  (run-interactive "Installing to simulator"
+                   (format nil "xcrun simctl install '~A' '~A'" udid (namestring app-path))))
 
 (defun install-to-device (device-id app-path)
   "Install an app bundle to a physical device using xcrun devicectl."
-  (let ((cmd-str (format nil "xcrun devicectl device install app --device '~A' '~A'"
-                         device-id (namestring app-path))))
-    (format t "Installing to device: ~A~%" cmd-str)
-    (uiop:run-program cmd-str :output :interactive :error-output :interactive)))
+  (run-interactive "Installing to device"
+                   (format nil "xcrun devicectl device install app --device '~A' '~A'"
+                           device-id (namestring app-path))))
 
 (defun focus-simulator ()
   "Bring the Simulator app to the foreground."
@@ -62,16 +64,14 @@
 (defun launch-on-simulator (udid bundle-id)
   "Launch an app on a booted simulator by bundle identifier."
   (focus-simulator)
-  (let ((cmd-str (format nil "xcrun simctl launch --terminate-running-process '~A' '~A'" udid bundle-id)))
-    (format t "Launching on simulator: ~A~%" cmd-str)
-    (uiop:run-program cmd-str :output :interactive :error-output :interactive)))
+  (run-interactive "Launching on simulator"
+                   (format nil "xcrun simctl launch --terminate-running-process '~A' '~A'" udid bundle-id)))
 
 (defun launch-on-device (device-id bundle-id)
   "Launch an app on a physical device by bundle identifier."
-  (let ((cmd-str (format nil "xcrun devicectl device process launch --console --terminate-existing --device '~A' '~A'"
-                         device-id bundle-id)))
-    (format t "Launching on device: ~A~%" cmd-str)
-    (uiop:run-program cmd-str :output :interactive :error-output :interactive)))
+  (run-interactive "Launching on device"
+                   (format nil "xcrun devicectl device process launch --console --terminate-existing --device '~A' '~A'"
+                           device-id bundle-id)))
 
 (defun install/handler (cmd)
   "Handler for the `install' command.
@@ -83,22 +83,10 @@ Builds the project then installs the .app to the target simulator or device."
          (configuration (clingon:getopt cmd :configuration))
          (device-id (resolve-device-destination cmd model))
          (sim-udid (unless device-id (resolve-sim-udid cmd model)))
-         (derived-data-path (clingon:getopt cmd :derived-data))
          (project-flag (resolve-project-flag cmd model))
-         (sdk (if device-id "iphoneos" "iphonesimulator"))
-         (destination (resolve-destination cmd model)))
-    (unless scheme
-      (format *error-output* "Error: No scheme specified and no default scheme configured.~%")
-      (clingon:print-usage-and-exit cmd t))
-    (unless (or device-id sim-udid)
-      (format *error-output* "Error: No simulator or device specified and none configured.~%")
-      (clingon:print-usage-and-exit cmd t))
-    ;; Build with derivedDataPath so we know where the .app lands
-    (let ((build-cmd (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A~@[ -derivedDataPath '~A'~] build"
-                             project-flag scheme destination configuration
-                             derived-data-path)))
-      (format t "Building: ~A~%" build-cmd)
-      (uiop:run-program build-cmd :output :interactive :error-output :interactive))
+         (sdk (if device-id "iphoneos" "iphonesimulator")))
+    ;; Build using run-xcodebuild from xcode-tools
+    (run-xcodebuild cmd "build")
     ;; Use -showBuildSettings to find app path and bundle ID
     (let* ((settings-output (get-build-settings scheme configuration sdk project-flag))
            (target-build-dir (get-build-setting settings-output "TARGET_BUILD_DIR"))
@@ -115,12 +103,10 @@ Builds the project then installs the .app to the target simulator or device."
         (format *error-output* "Error: Could not determine bundle identifier from build settings.~%")
         (uiop:quit 1))
       (if device-id
-          (install-to-device device-id app-path)
-          (install-to-simulator sim-udid app-path))
-      ;; Launch the installed app
-      (if device-id
-          (launch-on-device device-id bundle-id)
-          (launch-on-simulator sim-udid bundle-id)))))
+          (progn (install-to-device device-id app-path)
+                 (launch-on-device device-id bundle-id))
+          (progn (install-to-simulator sim-udid app-path)
+                 (launch-on-simulator sim-udid bundle-id))))))
 
 (defun install/command ()
   "A command to build and install the app to a simulator or device."
@@ -132,11 +118,4 @@ Builds the project then installs the .app to the target simulator or device."
 
 (defun install/options ()
   "Returns the options for the `install' command."
-  (append
-   (xcodebuild-options "install")
-   (list
-    (clingon:make-option
-     :string
-     :description "custom derived data path for the build"
-     :long-name "derived-data"
-     :key :derived-data))))
+  (xcodebuild-options "build and install"))

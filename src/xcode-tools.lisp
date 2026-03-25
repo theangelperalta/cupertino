@@ -27,12 +27,14 @@
 
 (defun run-xcodebuild (cmd action &key (scheme-accessors (list #'model-scheme)))
   "Run xcodebuild with the given action (build, test, clean, etc.).
-Resolves the scheme from CLI options or model accessors in order."
+Resolves the scheme from CLI options or model accessors in order.
+When --derived-data is provided, appends -derivedDataPath to the command."
   (let* ((path (first (clingon:command-arguments cmd)))
          (model (model:make-cupertino-model path))
          (project-flag (resolve-project-flag cmd model))
          (destination (resolve-destination cmd model))
          (configuration (clingon:getopt cmd :configuration))
+         (derived-data-path (clingon:getopt cmd :derived-data))
          (scheme (or (clingon:getopt cmd :scheme)
                      (some (lambda (fn) (funcall fn model)) scheme-accessors))))
     (unless scheme
@@ -41,8 +43,8 @@ Resolves the scheme from CLI options or model accessors in order."
     (unless destination
       (format *error-output* "Error: No simulator or device specified and none configured.~%")
       (clingon:print-usage-and-exit cmd t))
-    (let ((cmd-str (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A ~A"
-                           project-flag scheme destination configuration action)))
+    (let ((cmd-str (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A~@[ -derivedDataPath '~A'~] ~A"
+                           project-flag scheme destination configuration derived-data-path action)))
       (format t "Running: ~A~%" cmd-str)
       (uiop:run-program cmd-str :output :interactive :error-output :interactive))))
 
@@ -79,4 +81,9 @@ Resolves the scheme from CLI options or model accessors in order."
     :short-name #\c
     :long-name "configuration"
     :initial-value "Debug"
-    :key :configuration)))
+    :key :configuration)
+   (clingon:make-option
+    :string
+    :description "custom derived data path"
+    :long-name "derived-data"
+    :key :derived-data)))
