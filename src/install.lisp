@@ -83,13 +83,10 @@ Builds the project then installs the .app to the target simulator or device."
          (configuration (clingon:getopt cmd :configuration))
          (device-id (resolve-device-destination cmd model))
          (sim-udid (unless device-id (resolve-sim-udid cmd model)))
-         (derived-data-path (merge-pathnames ".cupertino/DerivedData/"
-                                             (or path (uiop:getcwd))))
+         (derived-data-path (clingon:getopt cmd :derived-data))
          (project-flag (resolve-project-flag cmd model))
          (sdk (if device-id "iphoneos" "iphonesimulator"))
-         (destination (if device-id
-                         "generic/platform=iOS"
-                         (format nil "platform=iOS Simulator,id=~A" sim-udid))))
+         (destination (resolve-destination cmd model)))
     (unless scheme
       (format *error-output* "Error: No scheme specified and no default scheme configured.~%")
       (clingon:print-usage-and-exit cmd t))
@@ -97,9 +94,9 @@ Builds the project then installs the .app to the target simulator or device."
       (format *error-output* "Error: No simulator or device specified and none configured.~%")
       (clingon:print-usage-and-exit cmd t))
     ;; Build with derivedDataPath so we know where the .app lands
-    (let ((build-cmd (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A -derivedDataPath '~A' build"
+    (let ((build-cmd (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A~@[ -derivedDataPath '~A'~] build"
                              project-flag scheme destination configuration
-                             (namestring derived-data-path))))
+                             derived-data-path)))
       (format t "Building: ~A~%" build-cmd)
       (uiop:run-program build-cmd :output :interactive :error-output :interactive))
     ;; Use -showBuildSettings to find app path and bundle ID
@@ -135,27 +132,11 @@ Builds the project then installs the .app to the target simulator or device."
 
 (defun install/options ()
   "Returns the options for the `install' command."
-  (list
-   (clingon:make-option
-    :string
-    :description "scheme to build and install"
-    :short-name #\s
-    :long-name "scheme"
-    :key :scheme)
-   (clingon:make-option
-    :string
-    :description "simulator UDID to install to"
-    :long-name "sim"
-    :key :sim)
-   (clingon:make-option
-    :string
-    :description "device UDID to install to"
-    :long-name "device"
-    :key :device)
-   (clingon:make-option
-    :string
-    :description "build configuration (Debug or Release)"
-    :short-name #\c
-    :long-name "configuration"
-    :initial-value "Debug"
-    :key :configuration)))
+  (append
+   (xcodebuild-options "install")
+   (list
+    (clingon:make-option
+     :string
+     :description "custom derived data path for the build"
+     :long-name "derived-data"
+     :key :derived-data))))
