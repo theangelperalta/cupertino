@@ -30,8 +30,8 @@
         nil))))
 
 (defun print-project-schemes (project-info)
-  "Prints the simulator devices types and runtimes of from the parsed list."
-  (let ((schemes (gethash "schemes" project-info))) ; Access the :devices key
+  "Prints the project schemes from the parsed list."
+  (let ((schemes (gethash "schemes" project-info)))
       (dolist (scheme schemes)
         (format t "  • ~a~%" (colored-text scheme :green)))))
 

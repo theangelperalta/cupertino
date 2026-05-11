@@ -14,9 +14,17 @@
     (uiop:run-program cmd :output :string :error-output nil)))
 
 (defun run-interactive (label cmd-str)
-  "Print LABEL with CMD-STR then run CMD-STR with interactive I/O."
-  (format t "~A: ~A~%" label cmd-str)
-  (uiop:run-program cmd-str :output :interactive :error-output :interactive))
+  "Print LABEL with CMD-STR then run CMD-STR with interactive I/O.
+Exits with the process exit code on failure."
+  (format t "~A ~A~%" (colored-text (format nil "~A:" label) :cyan) cmd-str)
+  (multiple-value-bind (output error-output exit-code)
+      (uiop:run-program cmd-str :output :interactive :error-output :interactive
+                                :ignore-error-status t)
+    (declare (ignore output error-output))
+    (unless (zerop exit-code)
+      (format *error-output* "~A command failed with exit code ~A.~%"
+              (colored-text "Error:" :red) exit-code)
+      (uiop:quit exit-code))))
 
 (defun resolve-sim-udid (cmd model)
   "Resolve the simulator UDID from CLI options or model."
@@ -30,7 +38,7 @@
 
 (defun boot-simulator (udid)
   "Boot the simulator by UDID if it is not already booted."
-  (format t "Booting simulator '~A'...~%" udid)
+  (format t "~A ~A~%" (colored-text "Booting simulator" :cyan) udid)
   (multiple-value-bind (output error-output exit-code)
       (uiop:run-program (format nil "xcrun simctl boot '~A'" udid)
                         :output :string :error-output :string
@@ -38,9 +46,9 @@
     (declare (ignore output))
     (cond
       ((zerop exit-code)
-       (format t "Simulator booted.~%"))
+       (format t "~A~%" (colored-text "Simulator booted." :green)))
       ((search "current state: Booted" error-output)
-       (format t "Simulator already booted.~%"))
+       (format t "~A~%" (colored-text "Simulator already booted." :green)))
       (t
        (format *error-output* "~A" error-output)
        (uiop:quit exit-code)))))
@@ -97,10 +105,12 @@ Builds the project then installs the .app to the target simulator or device."
                        (merge-pathnames wrapper-name
                                         (format nil "~A/" target-build-dir)))))
       (unless app-path
-        (format *error-output* "Error: Could not determine .app path from build settings.~%")
+        (format *error-output* "~A Could not determine .app path from build settings.~%"
+                (colored-text "Error:" :red))
         (uiop:quit 1))
       (unless bundle-id
-        (format *error-output* "Error: Could not determine bundle identifier from build settings.~%")
+        (format *error-output* "~A Could not determine bundle identifier from build settings.~%"
+                (colored-text "Error:" :red))
         (uiop:quit 1))
       (if device-id
           (progn (install-to-device device-id app-path)

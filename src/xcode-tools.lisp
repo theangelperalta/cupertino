@@ -38,15 +38,24 @@ When --derived-data is provided, appends -derivedDataPath to the command."
          (scheme (or (clingon:getopt cmd :scheme)
                      (some (lambda (fn) (funcall fn model)) scheme-accessors))))
     (unless scheme
-      (format *error-output* "Error: No scheme specified and no default scheme configured.~%")
+      (format *error-output* "~A No scheme specified and no default scheme configured.~%"
+              (colored-text "Error:" :red))
       (clingon:print-usage-and-exit cmd t))
     (unless destination
-      (format *error-output* "Error: No simulator or device specified and none configured.~%")
+      (format *error-output* "~A No simulator or device specified and none configured.~%"
+              (colored-text "Error:" :red))
       (clingon:print-usage-and-exit cmd t))
     (let ((cmd-str (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A~@[ -derivedDataPath '~A'~] ~A"
                            project-flag scheme destination configuration derived-data-path action)))
-      (format t "Running: ~A~%" cmd-str)
-      (uiop:run-program cmd-str :output :interactive :error-output :interactive))))
+      (format t "~A ~A~%" (colored-text "Running:" :cyan) cmd-str)
+      (multiple-value-bind (output error-output exit-code)
+          (uiop:run-program cmd-str :output :interactive :error-output :interactive
+                                    :ignore-error-status t)
+        (declare (ignore output error-output))
+        (unless (zerop exit-code)
+          (format *error-output* "~A xcodebuild ~A failed with exit code ~A.~%"
+                  (colored-text "Error:" :red) action exit-code)
+          (uiop:quit exit-code))))))
 
 (defun make-xcodebuild-command (name description &key (scheme-accessors (list #'model-scheme)))
   "Create a clingon command that runs xcodebuild with the given action."

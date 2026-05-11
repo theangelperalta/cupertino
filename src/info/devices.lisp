@@ -1,7 +1,7 @@
 (in-package :cupertino)
 
 
-;; Simualtor Info Contents
+;; Simulator Info Contents
 ;; - device types
 ;; - runtimes
 ;; - devices
@@ -16,7 +16,7 @@
        (print-sim-devices sim-devices-info)))))
 
 (defun list-sim-info ()
-  "Executes 'xcrun simctl list --json' and returns Returns results for all of simualtor devices and runtimes available."
+  "Executes 'xcrun simctl list --json' and returns results for all simulator devices and runtimes available."
   (let* ((command '("xcrun" "simctl" "list" "--json"))
          (output-string (uiop:run-program command :output :string :ignore-error-status t)))
     (handler-case
@@ -26,18 +26,18 @@
         nil))))
 
 (defun print-sim-device-types (device-info)
-  "Prints the simulator devices types and runtimes of from the parsed list."
+  "Prints the simulator device types from the parsed list."
   (format t (colored-text "== Devices Types ==~%" :white))
-  (let ((device-types (gethash "devicetypes" device-info))) ; Access the :devices key
+  (let ((device-types (gethash "devicetypes" device-info)))
       (dolist (device device-types)
         (format t "  • ~a (~a) ~%" 
                 (gethash "name" device)
                 (gethash "identifier" device)))))
 
 (defun print-sim-runtimes (device-info)
-  "Prints the simulator runtimes of from the parsed list."
+  "Prints the simulator runtimes from the parsed list."
   (format t (colored-text "== Runtimes ==~%" :white))
-  (let ((runtimes (gethash "runtimes" device-info))) ; Access the :devices key
+  (let ((runtimes (gethash "runtimes" device-info)))
       (dolist (runtime runtimes)
         (format t "  • ~a (~a - ~a) - ~a~%" 
                 (gethash "name" runtime)

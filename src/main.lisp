@@ -8,7 +8,10 @@
    (make-xcodebuild-command "test" "Run tests for the Xcode project"
                             :scheme-accessors (list #'model-test-scheme #'model-scheme))
    (make-xcodebuild-command "clean" "Clean the Xcode project")
-   (install/command)))
+   (install/command)
+   (config/command)
+   (init/command)
+   (dot/command)))
 
 (defun dot/command ()
   "Returns the command for the `dot' command"
@@ -47,6 +50,5 @@
 
 (defun main (&rest argv)
   "Entry point for CLI tool"
-  (declare (ignorable argv))
   (let ((app (top-level/command)))
-    (clingon:run app)))
+    (clingon:run app (first argv))))

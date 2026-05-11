@@ -5,6 +5,11 @@
   (:use #:cl #:common #:bordeaux-threads)
   (:export #:*discover-fn*
            #:make-cupertino-model
+           #:update-model-config
+           #:load-model
+           #:resolve-config-file
+           #:read-plist-file
+           #:write-plist-file
            #:model-project-type
            #:model-project-path
            #:model-sim
