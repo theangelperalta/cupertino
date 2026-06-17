@@ -101,6 +101,15 @@
       (uiop:quit 1))
     n))
 
+(defun parse-bool-arg (string what)
+  "Parse STRING as a boolean (true/false/yes/no/on/off/1/0), or exit with an error."
+  (cond
+    ((member string '("true" "yes" "on" "1" "t") :test #'string-equal) t)
+    ((member string '("false" "no" "off" "0" "nil") :test #'string-equal) nil)
+    (t (format *error-output* "~A ~A must be true or false, got ~S.~%"
+               (colored-text "Error:" :red) what string)
+       (uiop:quit 1))))
+
 (defun config/handler (cmd)
   "Handler for the `config' command.
 With options, updates the config file. Without options, prints the current config."
@@ -112,12 +121,15 @@ With options, updates the config file. Without options, prints the current confi
          (max-jobs (clingon:getopt cmd :max-jobs))
          (slow-threshold (let ((s (clingon:getopt cmd :slow-threshold)))
                            (when s (parse-positive-number s "slow-threshold"))))
+         (use-swb-raw (clingon:getopt cmd :use-swb))
          (updates (append (when scheme (list :scheme scheme))
                           (when test-scheme (list :test-scheme test-scheme))
                           (when sim (list :sim sim))
                           (when device (list :device device))
                           (when max-jobs (list :max-jobs max-jobs))
-                          (when slow-threshold (list :slow-threshold slow-threshold)))))
+                          (when slow-threshold (list :slow-threshold slow-threshold))
+                          (when use-swb-raw
+                            (list :use-swb (parse-bool-arg use-swb-raw "use-swb"))))))
     (if updates
         (let ((merged (model:update-model-config path updates)))
           (format t "~A ~A:~%"
@@ -175,7 +187,12 @@ With options, updates the config file. Without options, prints the current confi
     :string
     :description "seconds before a build action is highlighted as slow"
     :long-name "slow-threshold"
-    :key :slow-threshold)))
+    :key :slow-threshold)
+   (clingon:make-option
+    :string
+    :description "use Swift Build protocol interception (true or false)"
+    :long-name "use-swb"
+    :key :use-swb)))
 
 ;; Init command — interactive project setup
 
@@ -301,7 +318,8 @@ Returns a list of (type path) pairs where type is :workspace or :project."
                            :sim sim
                            :device nil
                            :scheme scheme
-                           :test-scheme test-scheme)))
+                           :test-scheme test-scheme
+                           :use-swb nil)))
           (model:update-model-config path plist)
           (format t "~%~A ~A~%"
                   (colored-text "Config written to" :green)

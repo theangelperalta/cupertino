@@ -17,4 +17,5 @@
            #:model-scheme
            #:model-test-scheme
            #:model-max-jobs
-           #:model-slow-threshold))
+           #:model-slow-threshold
+           #:model-use-swb))

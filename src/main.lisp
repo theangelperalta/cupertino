@@ -48,7 +48,15 @@
                         :options (top-level/options)
                         :sub-commands (top-level/sub-commands)))
 
+(defun maybe-run-swb-proxy ()
+  "If launched as the SWBBuildService proxy (env var set by us), run the
+proxy and exit; otherwise return NIL so normal CLI dispatch proceeds."
+  (let ((real (uiop:getenv swb:+real-service-env+)))
+    (when (and real (plusp (length real)))
+      (uiop:quit (swb:run-proxy real (uiop:getenv swb:+events-path-env+))))))
+
 (defun main (&rest argv)
   "Entry point for CLI tool"
+  (maybe-run-swb-proxy)
   (let ((app (top-level/command)))
     (clingon:run app (first argv))))
