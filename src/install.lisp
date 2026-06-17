@@ -69,17 +69,37 @@ Exits with the process exit code on failure."
   "Bring the Simulator app to the foreground."
   (uiop:run-program "open -a Simulator" :ignore-error-status t))
 
+;; Xcode's debug console shows print + NSLog + os_log/Logger together, in one
+;; format, with private values revealed. It achieves this by launching the app
+;; with OS_ACTIVITY_DT_MODE=YES, which makes the unified-logging system mirror
+;; os_log/Logger output to the process's stderr (in development-tools format,
+;; unredacted) instead of only the system log. We do the same: setting that env
+;; var on the launch — passed through via simctl's SIMCTL_CHILD_ / devicectl's
+;; DEVICECTL_CHILD_ prefix — gives Xcode-identical console output from the
+;; single stdout/stderr stream that --console / --console-pty already captures.
+;; This is why no separate `log stream' is needed: a side stream would use a
+;; different format, add system noise, redact private values, and duplicate
+;; NSLog (which already mirrors to stderr).
+(defparameter +activity-dt-mode-env+ "OS_ACTIVITY_DT_MODE=YES"
+  "Environment assignment that makes os_log mirror to stderr like Xcode does.")
+
 (defun launch-on-simulator (udid bundle-id)
-  "Launch an app on a booted simulator by bundle identifier."
+  "Launch an app on a booted simulator by bundle identifier.
+Sets OS_ACTIVITY_DT_MODE so os_log/Logger output mirrors to the console
+alongside stdout and NSLog, matching Xcode's debug console; --console-pty
+provides a pty so output stays line-buffered."
   (focus-simulator)
   (run-interactive "Launching on simulator"
-                   (format nil "xcrun simctl launch --terminate-running-process '~A' '~A'" udid bundle-id)))
+                   (format nil "SIMCTL_CHILD_~A xcrun simctl launch --console-pty --terminate-running-process '~A' '~A'"
+                           +activity-dt-mode-env+ udid bundle-id)))
 
 (defun launch-on-device (device-id bundle-id)
-  "Launch an app on a physical device by bundle identifier."
+  "Launch an app on a physical device by bundle identifier.
+Sets OS_ACTIVITY_DT_MODE so os_log/Logger output mirrors to the --console
+stream alongside stdout and NSLog, matching Xcode's debug console."
   (run-interactive "Launching on device"
-                   (format nil "xcrun devicectl device process launch --console --terminate-existing --device '~A' '~A'"
-                           device-id bundle-id)))
+                   (format nil "DEVICECTL_CHILD_~A xcrun devicectl device process launch --console --terminate-existing --device '~A' '~A'"
+                           +activity-dt-mode-env+ device-id bundle-id)))
 
 (defun install/handler (cmd)
   "Handler for the `install' command.
