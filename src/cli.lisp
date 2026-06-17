@@ -122,6 +122,7 @@ With options, updates the config file. Without options, prints the current confi
          (slow-threshold (let ((s (clingon:getopt cmd :slow-threshold)))
                            (when s (parse-positive-number s "slow-threshold"))))
          (use-swb-raw (clingon:getopt cmd :use-swb))
+         (cache-hits-raw (clingon:getopt cmd :cache-hits))
          (updates (append (when scheme (list :scheme scheme))
                           (when test-scheme (list :test-scheme test-scheme))
                           (when sim (list :sim sim))
@@ -129,7 +130,9 @@ With options, updates the config file. Without options, prints the current confi
                           (when max-jobs (list :max-jobs max-jobs))
                           (when slow-threshold (list :slow-threshold slow-threshold))
                           (when use-swb-raw
-                            (list :use-swb (parse-bool-arg use-swb-raw "use-swb"))))))
+                            (list :use-swb (parse-bool-arg use-swb-raw "use-swb")))
+                          (when cache-hits-raw
+                            (list :cache-hits (parse-bool-arg cache-hits-raw "cache-hits"))))))
     (if updates
         (let ((merged (model:update-model-config path updates)))
           (format t "~A ~A:~%"
@@ -192,7 +195,12 @@ With options, updates the config file. Without options, prints the current confi
     :string
     :description "use Swift Build protocol interception (true or false)"
     :long-name "use-swb"
-    :key :use-swb)))
+    :key :use-swb)
+   (clingon:make-option
+    :string
+    :description "show cache-hit (up-to-date task) percentage (true or false)"
+    :long-name "cache-hits"
+    :key :cache-hits)))
 
 ;; Init command — interactive project setup
 
@@ -319,7 +327,8 @@ Returns a list of (type path) pairs where type is :workspace or :project."
                            :device nil
                            :scheme scheme
                            :test-scheme test-scheme
-                           :use-swb nil)))
+                           :use-swb nil
+                           :cache-hits nil)))
           (model:update-model-config path plist)
           (format t "~%~A ~A~%"
                   (colored-text "Config written to" :green)

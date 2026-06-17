@@ -51,7 +51,12 @@ When --derived-data is provided, appends -derivedDataPath to the command."
       (let* ((*xcbuild-max-jobs* (or (model-max-jobs model) *xcbuild-max-jobs*))
              (*xcbuild-slow-threshold* (or (model-slow-threshold model)
                                            *xcbuild-slow-threshold*))
-             (want-swb (or (clingon:getopt cmd :use-swb) (model-use-swb model)))
+             (*xcbuild-show-cache-hits* (or (clingon:getopt cmd :cache-hits)
+                                            (model-cache-hits model)))
+             ;; Cache-hit counts come only from SWB protocol events, so showing
+             ;; them implies interception mode.
+             (want-swb (or (clingon:getopt cmd :use-swb) (model-use-swb model)
+                           *xcbuild-show-cache-hits*))
              (console (sc:make-superconsole))
              (real (and want-swb console (resolve-swb-service)))
              (self (and real (swb-self-executable)))
@@ -240,4 +245,9 @@ xcodebuild exit code."
     :flag
     :description "use Swift Build protocol interception for richer progress"
     :long-name "use-swb"
-    :key :use-swb)))
+    :key :use-swb)
+   (clingon:make-option
+    :flag
+    :description "show the cache-hit (up-to-date task) percentage (implies --use-swb)"
+    :long-name "cache-hits"
+    :key :cache-hits)))

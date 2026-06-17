@@ -32,6 +32,11 @@ actions and count older ones as finished, mirroring buck2's concurrent view.")
   "Seconds between background render-thread ticks. Each tick redraws the live
 canvas so elapsed times keep advancing even when xcodebuild produces no output.")
 
+(defparameter *xcbuild-show-cache-hits* nil
+  "When true, the dashboard shows a cache-hit percentage: the fraction of the
+build graph that was up to date and didn't need to run. Only meaningful in
+--use-swb mode, where the task total and per-task starts are known.")
+
 (defstruct xcbuild-job
   "One in-progress action shown on the live dashboard."
   (id nil)                              ; SWB task id, for precise start/end matching
@@ -47,6 +52,11 @@ canvas so elapsed times keep advancing even when xcodebuild produces no output."
   (compiled 0)
   (finished 0)                          ; actions that scrolled out of the window
   (skipped 0)                           ; up-to-date tasks (SWB mode)
+  (executed 0)                          ; tasks that actually ran (SWB task-started count)
+  (total-tasks 0)                       ; build-graph size, max total seen in progress (SWB)
+  ;; Captured at construction (main thread) so the render threads, which don't
+  ;; inherit the dynamic binding, still see whether to show cache hits.
+  (show-cache-hits *xcbuild-show-cache-hits*)
   (progress nil)                        ; "completed / total" string (SWB mode)
   (warnings 0)
   (errors 0)
@@ -148,10 +158,27 @@ Assumes the caller already truncated LEFT-SPANS to fit."
 (defclass xcbuild-progress (sc:component)
   ((stats :initarg :stats :reader xcbuild-progress-stats)))
 
+(defun xcbuild-cache-hits (stats)
+  "Return (values HITS TOTAL) for reused (up-to-date) tasks, or NIL when the
+build-graph total is unknown (e.g. text mode). HITS is the total task count
+minus the tasks that actually ran."
+  (let ((total (xcbuild-stats-total-tasks stats))
+        (executed (xcbuild-stats-executed stats)))
+    (when (plusp total)
+      (values (max 0 (- total executed)) total))))
+
+(defun xcbuild-cache-hits-string (stats)
+  "Cache-hit summary like \"Cache hits: 87% (412/470)\", or NIL when display is
+disabled or no task total is known yet."
+  (when (xcbuild-stats-show-cache-hits stats)
+    (multiple-value-bind (hits total) (xcbuild-cache-hits stats)
+      (when total
+        (format nil "Cache hits: ~D% (~D/~D)" (round (* 100 hits) total) hits total)))))
+
 (defun xcbuild-counts-string (stats)
   "buck2-style job summary, e.g.
 \"Jobs: In progress: 8. Finished: 412. Warnings: 1. Errors: 0. Time elapsed: 31.3s\"."
-  (format nil "Jobs: In progress: ~D. Finished: ~D.~@[ Skipped: ~D.~]~@[ Warnings: ~D.~]~@[ Errors: ~D.~]~@[ Tests: ~A.~]~@[ Progress: ~A.~] Time elapsed: ~,1Fs"
+  (format nil "Jobs: In progress: ~D. Finished: ~D.~@[ Skipped: ~D.~]~@[ Warnings: ~D.~]~@[ Errors: ~D.~]~@[ Tests: ~A.~]~@[ Progress: ~A.~]~@[ ~A.~] Time elapsed: ~,1Fs"
           (length (xcbuild-stats-jobs stats))
           (xcbuild-stats-finished stats)
           (when (plusp (xcbuild-stats-skipped stats)) (xcbuild-stats-skipped stats))
@@ -163,12 +190,13 @@ Assumes the caller already truncated LEFT-SPANS to fit."
                     (xcbuild-stats-tests-passed stats)
                     (xcbuild-stats-tests-failed stats)))
           (xcbuild-stats-progress stats)
+          (xcbuild-cache-hits-string stats)
           (xcbuild-elapsed (xcbuild-stats-start-time stats))))
 
 (defun xcbuild-final-summary (stats)
   "One-line completion summary for the final frame, e.g.
 \"(417 compiled, 1 warning, 0 errors) in 31.3s\"."
-  (format nil "(~D compiled~@[, ~D skipped~], ~D warning~:P, ~D error~:P~@[, tests ~A~]) in ~,1Fs"
+  (format nil "(~D compiled~@[, ~D skipped~], ~D warning~:P, ~D error~:P~@[, tests ~A~]~@[, ~A~]) in ~,1Fs"
           (xcbuild-stats-compiled stats)
           (when (plusp (xcbuild-stats-skipped stats)) (xcbuild-stats-skipped stats))
           (xcbuild-stats-warnings stats)
@@ -178,6 +206,7 @@ Assumes the caller already truncated LEFT-SPANS to fit."
             (format nil "~D✓/~D✗"
                     (xcbuild-stats-tests-passed stats)
                     (xcbuild-stats-tests-failed stats)))
+          (xcbuild-cache-hits-string stats)
           (xcbuild-elapsed (xcbuild-stats-start-time stats))))
 
 (defun xcbuild-header-line (stats width)
@@ -372,6 +401,7 @@ OUTER = #(task-id NIL NIL #(rule-id signature rule description ...))."
            (rule (when (and (vectorp inner) (>= (length inner) 3)) (aref inner 2)))
            (desc (when (and (vectorp inner) (>= (length inner) 4)) (aref inner 3)))
            (kind (swb-task-kind rule ruleid)))
+      (incf (xcbuild-stats-executed stats))
       (when (string= kind "compile") (incf (xcbuild-stats-compiled stats)))
       (setf (xcbuild-stats-jobs stats)
             (append (xcbuild-stats-jobs stats)
@@ -418,11 +448,23 @@ diagnostic at several scopes; dedup so counts match what a human expects."
              (xcbuild-emit console (xcbuild-span "      error " #'sc:red #'sc:bold)
                            (xcbuild-span msg #'sc:red)))))))))
 
+(defun xcbuild-progress-total (string)
+  "Parse the denominator from a \"completed / total\" progress STRING, or NIL.
+PARSE-INTEGER skips the leading whitespace after the slash."
+  (let ((slash (position #\/ string)))
+    (when slash
+      (ignore-errors (parse-integer string :start (1+ slash) :junk-allowed t)))))
+
 (defun xcbuild-swb-progress (stats arg)
   "Update the overall progress string from a BUILD_PROGRESS_UPDATED payload
-ARG = #(target \"completed / total\" percent ...)."
+ARG = #(target \"completed / total\" percent ...). Also tracks the largest task
+total seen, which is the build-graph size used for the cache-hit percentage."
   (when (and (vectorp arg) (>= (length arg) 2) (stringp (aref arg 1)))
-    (setf (xcbuild-stats-progress stats) (xcbuild-clean (aref arg 1)))))
+    (let ((s (xcbuild-clean (aref arg 1))))
+      (setf (xcbuild-stats-progress stats) s)
+      (let ((total (xcbuild-progress-total s)))
+        (when (and total (> total (xcbuild-stats-total-tasks stats)))
+          (setf (xcbuild-stats-total-tasks stats) total))))))
 
 (defun xcbuild-swb-build-ended (stats arg)
   "Record the build result from a BUILD_OPERATION_ENDED payload

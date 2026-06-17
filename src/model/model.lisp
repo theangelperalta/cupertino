@@ -13,7 +13,8 @@
    (test-scheme :initarg :test-scheme :accessor model-test-scheme)
    (max-jobs :initarg :max-jobs :accessor model-max-jobs)
    (slow-threshold :initarg :slow-threshold :accessor model-slow-threshold)
-   (use-swb :initarg :use-swb :accessor model-use-swb)))
+   (use-swb :initarg :use-swb :accessor model-use-swb)
+   (cache-hits :initarg :cache-hits :accessor model-cache-hits)))
 
 (defvar *model-cache* (make-hash-table :test 'equal)
   "Per-path cache of loaded plists keyed by resolved config file path.")
@@ -72,7 +73,8 @@
                    :test-scheme (getf plist :test-scheme)
                    :max-jobs (getf plist :max-jobs)
                    :slow-threshold (getf plist :slow-threshold)
-                   :use-swb (getf plist :use-swb))))
+                   :use-swb (getf plist :use-swb)
+                   :cache-hits (getf plist :cache-hits))))
 
 (defun update-model-config (path updates)
   "Merge UPDATES (a plist of key-value pairs) into the config file at PATH.

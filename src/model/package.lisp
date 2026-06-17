@@ -18,4 +18,5 @@
            #:model-test-scheme
            #:model-max-jobs
            #:model-slow-threshold
-           #:model-use-swb))
+           #:model-use-swb
+           #:model-cache-hits))
