@@ -35,7 +35,8 @@ canvas so elapsed times keep advancing even when xcodebuild produces no output."
 (defparameter *xcbuild-show-cache-hits* nil
   "When true, the dashboard shows a cache-hit percentage: the fraction of the
 build graph that was up to date and didn't need to run. Only meaningful in
---use-swb mode, where the task total and per-task starts are known.")
+--use-swb mode, where the task total and per-task starts are known, so it
+defaults on whenever SWB interception is active (see RUN-XCODEBUILD).")
 
 (defstruct xcbuild-job
   "One in-progress action shown on the live dashboard."

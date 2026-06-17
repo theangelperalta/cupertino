@@ -51,12 +51,17 @@ When --derived-data is provided, appends -derivedDataPath to the command."
       (let* ((*xcbuild-max-jobs* (or (model-max-jobs model) *xcbuild-max-jobs*))
              (*xcbuild-slow-threshold* (or (model-slow-threshold model)
                                            *xcbuild-slow-threshold*))
-             (*xcbuild-show-cache-hits* (or (clingon:getopt cmd :cache-hits)
-                                            (model-cache-hits model)))
-             ;; Cache-hit counts come only from SWB protocol events, so showing
-             ;; them implies interception mode.
+             ;; Cache-hit counts come only from SWB protocol events, so asking
+             ;; for them implies interception mode.
              (want-swb (or (clingon:getopt cmd :use-swb) (model-use-swb model)
-                           *xcbuild-show-cache-hits*))
+                           (clingon:getopt cmd :cache-hits) (model-cache-hits model)))
+             ;; Cache hits show by default whenever SWB is active. An explicit
+             ;; --cache-hits forces them on; an explicit :cache-hits in the
+             ;; config (true or false) overrides the default either way.
+             (*xcbuild-show-cache-hits*
+               (cond ((clingon:getopt cmd :cache-hits) t)
+                     ((member :cache-hits (model:load-model path)) (model-cache-hits model))
+                     (t want-swb)))
              (console (sc:make-superconsole))
              (real (and want-swb console (resolve-swb-service)))
              (self (and real (swb-self-executable)))
@@ -248,6 +253,6 @@ xcodebuild exit code."
     :key :use-swb)
    (clingon:make-option
     :flag
-    :description "show the cache-hit (up-to-date task) percentage (implies --use-swb)"
+    :description "show the cache-hit (up-to-date task) percentage (on by default with SWB; implies --use-swb)"
     :long-name "cache-hits"
     :key :cache-hits)))

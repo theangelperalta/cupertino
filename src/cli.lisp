@@ -198,7 +198,7 @@ With options, updates the config file. Without options, prints the current confi
     :key :use-swb)
    (clingon:make-option
     :string
-    :description "show cache-hit (up-to-date task) percentage (true or false)"
+    :description "show cache-hit (up-to-date task) percentage; defaults to on with SWB (true or false)"
     :long-name "cache-hits"
     :key :cache-hits)))
 
@@ -327,8 +327,7 @@ Returns a list of (type path) pairs where type is :workspace or :project."
                            :device nil
                            :scheme scheme
                            :test-scheme test-scheme
-                           :use-swb nil
-                           :cache-hits nil)))
+                           :use-swb nil)))
           (model:update-model-config path plist)
           (format t "~%~A ~A~%"
                   (colored-text "Config written to" :green)
