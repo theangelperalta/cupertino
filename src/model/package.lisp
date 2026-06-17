@@ -15,4 +15,6 @@
            #:model-sim
            #:model-device
            #:model-scheme
-           #:model-test-scheme))
+           #:model-test-scheme
+           #:model-max-jobs
+           #:model-slow-threshold))

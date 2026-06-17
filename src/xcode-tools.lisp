@@ -48,14 +48,25 @@ When --derived-data is provided, appends -derivedDataPath to the command."
     (let ((cmd-str (format nil "xcodebuild ~A -scheme '~A' -destination '~A' -configuration ~A~@[ -derivedDataPath '~A'~] ~A"
                            project-flag scheme destination configuration derived-data-path action)))
       (format t "~A ~A~%" (colored-text "Running:" :cyan) cmd-str)
-      (multiple-value-bind (output error-output exit-code)
-          (uiop:run-program cmd-str :output :interactive :error-output :interactive
-                                    :ignore-error-status t)
-        (declare (ignore output error-output))
+      (let* ((*xcbuild-max-jobs* (or (model-max-jobs model) *xcbuild-max-jobs*))
+             (*xcbuild-slow-threshold* (or (model-slow-threshold model)
+                                           *xcbuild-slow-threshold*))
+             (console (sc:make-superconsole))
+             (exit-code (if console
+                            (run-xcodebuild/pretty cmd-str action console)
+                            (run-xcodebuild/raw cmd-str))))
         (unless (zerop exit-code)
           (format *error-output* "~A xcodebuild ~A failed with exit code ~A.~%"
                   (colored-text "Error:" :red) action exit-code)
           (uiop:quit exit-code))))))
+
+(defun run-xcodebuild/raw (cmd-str)
+  "Run CMD-STR with raw interactive I/O (the non-TTY fallback). Return the exit code."
+  (multiple-value-bind (output error-output exit-code)
+      (uiop:run-program cmd-str :output :interactive :error-output :interactive
+                                :ignore-error-status t)
+    (declare (ignore output error-output))
+    exit-code))
 
 (defun make-xcodebuild-command (name description &key (scheme-accessors (list #'model-scheme)))
   "Create a clingon command that runs xcodebuild with the given action."

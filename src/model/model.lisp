@@ -10,7 +10,9 @@
    (sim :initarg :sim :accessor model-sim)
    (device :initarg :device :accessor model-device)
    (scheme :initarg :scheme :accessor model-scheme)
-   (test-scheme :initarg :test-scheme :accessor model-test-scheme)))
+   (test-scheme :initarg :test-scheme :accessor model-test-scheme)
+   (max-jobs :initarg :max-jobs :accessor model-max-jobs)
+   (slow-threshold :initarg :slow-threshold :accessor model-slow-threshold)))
 
 (defvar *model-cache* (make-hash-table :test 'equal)
   "Per-path cache of loaded plists keyed by resolved config file path.")
@@ -66,7 +68,9 @@
                    :sim (getf plist :sim)
                    :device (getf plist :device)
                    :scheme (getf plist :scheme)
-                   :test-scheme (getf plist :test-scheme))))
+                   :test-scheme (getf plist :test-scheme)
+                   :max-jobs (getf plist :max-jobs)
+                   :slow-threshold (getf plist :slow-threshold))))
 
 (defun update-model-config (path updates)
   "Merge UPDATES (a plist of key-value pairs) into the config file at PATH.

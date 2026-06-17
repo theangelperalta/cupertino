@@ -90,6 +90,17 @@
 
 ;; Config command
 
+(defun parse-positive-number (string what)
+  "Parse STRING as a positive real number, or exit with an error mentioning WHAT."
+  (let ((n (ignore-errors
+            (let ((*read-default-float-format* 'double-float))
+              (read-from-string string)))))
+    (unless (and (realp n) (plusp n))
+      (format *error-output* "~A ~A must be a positive number, got ~S.~%"
+              (colored-text "Error:" :red) what string)
+      (uiop:quit 1))
+    n))
+
 (defun config/handler (cmd)
   "Handler for the `config' command.
 With options, updates the config file. Without options, prints the current config."
@@ -98,10 +109,15 @@ With options, updates the config file. Without options, prints the current confi
          (test-scheme (clingon:getopt cmd :test-scheme))
          (sim (clingon:getopt cmd :sim))
          (device (clingon:getopt cmd :device))
+         (max-jobs (clingon:getopt cmd :max-jobs))
+         (slow-threshold (let ((s (clingon:getopt cmd :slow-threshold)))
+                           (when s (parse-positive-number s "slow-threshold"))))
          (updates (append (when scheme (list :scheme scheme))
                           (when test-scheme (list :test-scheme test-scheme))
                           (when sim (list :sim sim))
-                          (when device (list :device device)))))
+                          (when device (list :device device))
+                          (when max-jobs (list :max-jobs max-jobs))
+                          (when slow-threshold (list :slow-threshold slow-threshold)))))
     (if updates
         (let ((merged (model:update-model-config path updates)))
           (format t "~A ~A:~%"
@@ -149,7 +165,17 @@ With options, updates the config file. Without options, prints the current confi
     :string
     :description "set the default device UDID"
     :long-name "device"
-    :key :device)))
+    :key :device)
+   (clingon:make-option
+    :integer
+    :description "max in-progress actions shown in the build dashboard"
+    :long-name "max-jobs"
+    :key :max-jobs)
+   (clingon:make-option
+    :string
+    :description "seconds before a build action is highlighted as slow"
+    :long-name "slow-threshold"
+    :key :slow-threshold)))
 
 ;; Init command — interactive project setup
 

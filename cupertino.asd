@@ -16,7 +16,8 @@
                #:clingon
                #:cl-ppcre
                #:yason
-               #:str)
+               #:str
+               #:supercons)
   :components (
                (:file "common/package")
                (:file "common/model-interface")
@@ -26,6 +27,8 @@
                (:file "utils")
                (:file "info/devices")
                (:file "info/project")
+               (:file "xcbuild-parser")
+               (:file "xcbuild-pretty")
                (:file "xcode-tools")
                (:file "install")
                (:file "cli")
