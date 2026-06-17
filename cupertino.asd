@@ -17,12 +17,18 @@
                #:cl-ppcre
                #:yason
                #:str
-               #:supercons)
+               #:supercons
+               #:cl-messagepack
+               #:flexi-streams)
   :components (
                (:file "common/package")
                (:file "common/model-interface")
                (:file "model/package")
                (:file "model/model")
+               (:file "swb/package")
+               (:file "swb/framing")
+               (:file "swb/events")
+               (:file "swb/proxy")
                (:file "package")
                (:file "utils")
                (:file "info/devices")
