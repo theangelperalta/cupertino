@@ -47,8 +47,7 @@
         (project (clingon:getopt cmd :project))
         (workspace (clingon:getopt cmd :workspace)))
     (if (and project workspace)
-        (format *error-output* "~A You cannot specify both an Xcode project and a workspace.~%"
-                (colored-text "Error:" :red))
+        (cup-error "You cannot specify both an Xcode project and a workspace.")
         (cond (project (print-project-info ':project project))
         (workspace (print-project-info ':workspace workspace))
         (project-file-type (print-project-info project-file-type path))
@@ -96,8 +95,7 @@
             (let ((*read-default-float-format* 'double-float))
               (read-from-string string)))))
     (unless (and (realp n) (plusp n))
-      (format *error-output* "~A ~A must be a positive number, got ~S.~%"
-              (colored-text "Error:" :red) what string)
+      (cup-error "~A must be a positive number, got ~S." what string)
       (uiop:quit 1))
     n))
 
@@ -106,8 +104,7 @@
   (cond
     ((member string '("true" "yes" "on" "1" "t") :test #'string-equal) t)
     ((member string '("false" "no" "off" "0" "nil") :test #'string-equal) nil)
-    (t (format *error-output* "~A ~A must be true or false, got ~S.~%"
-               (colored-text "Error:" :red) what string)
+    (t (cup-error "~A must be true or false, got ~S." what string)
        (uiop:quit 1))))
 
 (defun config/handler (cmd)
@@ -116,6 +113,10 @@ With options, updates the config file. Without options, prints the current confi
   (let* ((path (first (clingon:command-arguments cmd)))
          (scheme (clingon:getopt cmd :scheme))
          (test-scheme (clingon:getopt cmd :test-scheme))
+         (schemes (clingon:getopt cmd :schemes))
+         (test-schemes (clingon:getopt cmd :test-schemes))
+         (cells (clingon:getopt cmd :cells))
+         (test-cells (clingon:getopt cmd :test-cells))
          (sim (clingon:getopt cmd :sim))
          (device (clingon:getopt cmd :device))
          (max-jobs (clingon:getopt cmd :max-jobs))
@@ -125,6 +126,10 @@ With options, updates the config file. Without options, prints the current confi
          (cache-hits-raw (clingon:getopt cmd :cache-hits))
          (updates (append (when scheme (list :scheme scheme))
                           (when test-scheme (list :test-scheme test-scheme))
+                          (when schemes (list :schemes schemes))
+                          (when test-schemes (list :test-schemes test-schemes))
+                          (when cells (list :cells cells))
+                          (when test-cells (list :test-cells test-cells))
                           (when sim (list :sim sim))
                           (when device (list :device device))
                           (when max-jobs (list :max-jobs max-jobs))
@@ -171,6 +176,26 @@ With options, updates the config file. Without options, prints the current confi
     :short-name #\t
     :long-name "test-scheme"
     :key :test-scheme)
+   (clingon:make-option
+    :list
+    :description "set the default build schemes for parallel matrix runs (repeatable)"
+    :long-name "schemes"
+    :key :schemes)
+   (clingon:make-option
+    :list
+    :description "set the default test schemes for parallel matrix runs (repeatable)"
+    :long-name "test-schemes"
+    :key :test-schemes)
+   (clingon:make-option
+    :list
+    :description "set default build cells as scheme@destination pairings, e.g. MyScheme@sim=UDID (repeatable)"
+    :long-name "cells"
+    :key :cells)
+   (clingon:make-option
+    :list
+    :description "set default test cells as scheme@destination pairings, e.g. MyTests@sim=UDID (repeatable)"
+    :long-name "test-cells"
+    :key :test-cells)
    (clingon:make-option
     :string
     :description "set the default simulator UDID"
@@ -282,8 +307,7 @@ Returns a list of (type path) pairs where type is :workspace or :project."
          (found (find-project-files dir))
          (target nil))
     (unless found
-      (format *error-output* "~A No .xcodeproj or .xcworkspace found in ~A~%"
-              (colored-text "Error:" :red) dir)
+      (cup-error "No .xcodeproj or .xcworkspace found in ~A" dir)
       (uiop:quit 1))
     (if (= (length found) 1)
         (setf target (first found))

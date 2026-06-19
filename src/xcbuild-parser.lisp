@@ -26,9 +26,21 @@ e.g. \"Ld /build/Foo.app/Foo normal\" -> \"Foo\"."
 
 (defun xcbuild-test-suite-name (line)
   "Extract the suite name from a Test case LINE:
-\"Suite/method()\" -> \"Suite\"; \"-[Suite method]\" -> \"Suite\"; NIL if no match."
+\"Suite.method()\" -> \"Suite\" (Swift); \"-[Suite method]\" -> \"Suite\" (ObjC);
+NIL if no match. The capture class deliberately excludes `.' so the Swift
+`Suite.method()' form stops at the dot rather than greedily swallowing the
+method name."
   (multiple-value-bind (match groups)
-      (cl-ppcre:scan-to-strings "Test [Cc]ase '(?:-\\[)?([A-Za-z0-9_.]+)" line)
+      (cl-ppcre:scan-to-strings "Test [Cc]ase '(?:-\\[)?([A-Za-z0-9_]+)" line)
+    (declare (ignore match))
+    (when groups (aref groups 0))))
+
+(defun xcbuild-test-summary-suite-name (line)
+  "Extract the suite name from a `Test Suite 'X' passed/failed' LINE, or NIL.
+Used to retire the suite's live-dashboard row once xcodebuild announces its
+completion. Returns NIL for the run-level `Executed N tests' rollup."
+  (multiple-value-bind (match groups)
+      (cl-ppcre:scan-to-strings "^Test [Ss]uite '(.+?)' (?:passed|failed)" line)
     (declare (ignore match))
     (when groups (aref groups 0))))
 
@@ -42,6 +54,28 @@ e.g. \"Ld /build/Foo.app/Foo normal\" -> \"Foo\"."
     (if match
         (format nil "~A~@[ (~As)~]" (aref groups 0) (aref groups 1))
         line)))
+
+(defun xcbuild-package-name (line)
+  "Best-effort package name from a Swift Package Manager resolution LINE: the
+quoted name in `... package 'NAME'' (straight or curly quotes) when present,
+else the repo basename of a URL (`.../NAME.git' -> NAME), else NIL. The `.'
+before the capture matches one opening quote char of any style."
+  (or (multiple-value-bind (match groups)
+          (cl-ppcre:scan-to-strings "package .([A-Za-z0-9_.+-]+)" line)
+        (declare (ignore match))
+        (when groups (aref groups 0)))
+      (multiple-value-bind (match groups)
+          (cl-ppcre:scan-to-strings "https?://\\S*?/([^/ ]+?)(?:\\.git)?/?\\s*$" line)
+        (declare (ignore match))
+        (when groups (aref groups 0)))))
+
+(defun xcbuild-package-kind (line)
+  "Short action verb for an SPM resolution-activity LINE, for the dashboard row:
+\"fetch\"/\"clone\"/\"update\", or \"checkout\" for working-copy/checkout lines."
+  (cond ((cl-ppcre:scan "^Fetching" line) "fetch")
+        ((cl-ppcre:scan "^Cloning" line) "clone")
+        ((cl-ppcre:scan "^Updating" line) "update")
+        (t "checkout")))
 
 (defparameter *xcbuild-rules*
   ;; Each rule is (regex . type). Evaluated top-to-bottom; first match wins.
@@ -58,6 +92,14 @@ e.g. \"Ld /build/Foo.app/Foo normal\" -> \"Foo\"."
     ("^Test [Cc]ase '(.+?)' passed"                                . :test-case-passed)
     ("^Test [Cc]ase '(.+?)' (?:failed|errored)"                    . :test-case-failed)
     ("^Test [Ss]uite '.+' (?:passed|failed)|^Executed \\d+ test"   . :test-suite-summary)
+    ;; Swift Package Manager resolution. Shown as live dashboard rows, not
+    ;; scrollback: `Resolve Package Graph` starts it, per-package
+    ;; `Fetching/Cloning/Updating/Creating working copy/Checking out` lines drive
+    ;; the rows, and `Resolved source packages:` (or its lowercase one-line
+    ;; summary) ends it. None of these collide with the diagnostic rules below.
+    ("^Resolve Package Graph"                                       . :package-resolve-start)
+    ("^(?:Fetching|Cloning|Updating|Creating working copy of|Checking out)\\b" . :package-fetch)
+    ("^[Rr]esolved source packages"                                 . :package-resolved)
     (": (?:fatal )?error:|^(?:ld|clang): error:|^fatal error:"      . :error)
     (": warning:|^(?:ld|clang): warning:"                           . :warning)
     ("^(?:=== BUILD TARGET |Build target |=== ANALYZE TARGET )"     . :phase)
@@ -78,8 +120,9 @@ e.g. \"Ld /build/Foo.app/Foo normal\" -> \"Foo\"."
   "Classify a single xcodebuild output LINE.
 Return a plist (:type KEYWORD :file STRING-OR-NIL :text LINE). TYPE is one of
 :result-success :result-failure :testing-start :test-suite-start
-:test-case-passed :test-case-failed :test-suite-summary :error :warning :phase
-:compile :link :copy :codesign :other, or :unknown when no rule matches."
+:test-case-passed :test-case-failed :test-suite-summary :package-resolve-start
+:package-fetch :package-resolved :error :warning :phase :compile :link :copy
+:codesign :other, or :unknown when no rule matches."
   (let ((type (loop for (scanner . ty) in *xcbuild-compiled-rules*
                     when (cl-ppcre:scan scanner line)
                       return ty)))

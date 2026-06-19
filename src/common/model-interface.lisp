@@ -39,3 +39,15 @@
 
 (defgeneric (setf model-test-scheme) (new-value obj)
   (:documentation "Set the test scheme of OBJ to NEW-VALUE."))
+
+(defgeneric model-schemes (obj)
+  (:documentation "Get the list of default build schemes of OBJ."))
+
+(defgeneric (setf model-schemes) (new-value obj)
+  (:documentation "Set the list of default build schemes of OBJ to NEW-VALUE."))
+
+(defgeneric model-test-schemes (obj)
+  (:documentation "Get the list of default test schemes of OBJ."))
+
+(defgeneric (setf model-test-schemes) (new-value obj)
+  (:documentation "Set the list of default test schemes of OBJ to NEW-VALUE."))

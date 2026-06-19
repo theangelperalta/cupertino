@@ -6,7 +6,9 @@
    (info/top-level/command)
    (make-xcodebuild-command "build" "Build the Xcode project")
    (make-xcodebuild-command "test" "Run tests for the Xcode project"
-                            :scheme-accessors (list #'model-test-scheme #'model-scheme))
+                            :scheme-accessors (list #'model-test-schemes #'model-test-scheme
+                                                    #'model-schemes #'model-scheme)
+                            :cell-accessors (list #'model-test-cells #'model-cells))
    (make-xcodebuild-command "clean" "Clean the Xcode project")
    (install/command)
    (config/command)

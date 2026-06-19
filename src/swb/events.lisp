@@ -41,16 +41,19 @@ name-prefixed); ARGS is the list of remaining decoded MessagePack values."
                       until (eq v :eof)
                       collect v))))))
 
-(defun frame->event (channel body)
+(defun frame->event (channel body &key trace-unknown)
   "Return a plist event for an interesting frame, or NIL.
-Shape: (:TYPE keyword :NAME string :CHANNEL integer :ARGS list).  Never
+Shape: (:TYPE keyword :NAME string :CHANNEL integer :ARGS list).  Names not
+in *INTERESTING-MESSAGES* yield NIL by default; when TRACE-UNKNOWN is true
+they instead yield (:TYPE :UNKNOWN :NAME string :CHANNEL integer) (no :ARGS),
+so the dashboard can scroll the wire names it does not yet handle. Never
 signals: any decode error yields NIL."
   (handler-case
       (multiple-value-bind (name args) (%decode-body body)
         (when (stringp name)
           (let ((type (cdr (assoc name *interesting-messages* :test #'string=))))
-            (when type
-              (list :type type :name name :channel channel :args args)))))
+            (cond (type (list :type type :name name :channel channel :args args))
+                  (trace-unknown (list :type :unknown :name name :channel channel))))))
     (error () nil)))
 
 (defun write-event (stream event)

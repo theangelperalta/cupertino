@@ -22,8 +22,7 @@ Exits with the process exit code on failure."
                                 :ignore-error-status t)
     (declare (ignore output error-output))
     (unless (zerop exit-code)
-      (format *error-output* "~A command failed with exit code ~A.~%"
-              (colored-text "Error:" :red) exit-code)
+      (cup-error "command failed with exit code ~A." exit-code)
       (uiop:quit exit-code))))
 
 (defun resolve-sim-udid (cmd model)
@@ -125,12 +124,10 @@ Builds the project then installs the .app to the target simulator or device."
                        (merge-pathnames wrapper-name
                                         (format nil "~A/" target-build-dir)))))
       (unless app-path
-        (format *error-output* "~A Could not determine .app path from build settings.~%"
-                (colored-text "Error:" :red))
+        (cup-error "Could not determine .app path from build settings.")
         (uiop:quit 1))
       (unless bundle-id
-        (format *error-output* "~A Could not determine bundle identifier from build settings.~%"
-                (colored-text "Error:" :red))
+        (cup-error "Could not determine bundle identifier from build settings.")
         (uiop:quit 1))
       (if device-id
           (progn (install-to-device device-id app-path)

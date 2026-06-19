@@ -22,5 +22,7 @@
            #:*interesting-messages*
            ;; proxy
            #:run-proxy
+           #:+service-path-env+
            #:+real-service-env+
-           #:+events-path-env+))
+           #:+events-path-env+
+           #:+trace-env+))

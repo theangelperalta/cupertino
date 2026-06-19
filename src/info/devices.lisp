@@ -52,6 +52,16 @@
         (setf (gethash (gethash "identifier" runtime) map) (gethash "name" runtime)))
     map))
 
+(defun sim-runtime-name (device-info runtime-id)
+  "Human-readable runtime name (e.g. \"iOS 26.5\") for RUNTIME-ID in a parsed
+simctl DEVICE-INFO, or NIL when absent."
+  (when device-info
+    (let ((runtimes (gethash "runtimes" device-info)))
+      (when runtimes
+        (loop for r in runtimes
+              when (equal (gethash "identifier" r) runtime-id)
+                return (gethash "name" r))))))
+
 (defun print-sim-devices (device-info)
   "Prints the names and UUIDs of available devices from the parsed list."
   (format t (colored-text "== Devices ==~%" :white))

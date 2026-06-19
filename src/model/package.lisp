@@ -16,6 +16,10 @@
            #:model-device
            #:model-scheme
            #:model-test-scheme
+           #:model-schemes
+           #:model-test-schemes
+           #:model-cells
+           #:model-test-cells
            #:model-max-jobs
            #:model-slow-threshold
            #:model-use-swb

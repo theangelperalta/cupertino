@@ -12,12 +12,21 @@
 
 (in-package :swb)
 
+(defparameter +service-path-env+ "SWBBUILDSERVICE_PATH"
+  "Apple-defined env var xcodebuild reads to discover the Swift Build service
+binary. Cupertino points it at its own image to install the proxy.")
+
 (defparameter +real-service-env+ "CUPERTINO_SWB_REAL"
   "Env var holding the path of the genuine SWBBuildService executable.
 Its presence is what puts Cupertino into proxy mode.")
 
 (defparameter +events-path-env+ "CUPERTINO_SWB_EVENTS"
   "Env var holding a path the proxy appends decoded events to (optional).")
+
+(defparameter +trace-env+ "CUPERTINO_SWB_TRACE"
+  "Env var that, when set to a non-empty value, makes the proxy emit a
+synthetic :UNKNOWN event for every wire message name not in
+*INTERESTING-MESSAGES*. Off by default to keep the events file lean.")
 
 (defun %binary-fd-stream (fd direction)
   "An unbuffered binary stream over raw file descriptor FD."
@@ -55,6 +64,8 @@ Returns the real service's exit code.  If EVENTS-PATH is non-NIL, decoded
 service->client events are appended to it as readable forms."
   (let* ((client-in  (%binary-fd-stream 0 :input))
          (client-out (%binary-fd-stream 1 :output))
+         (trace-env (uiop:getenv +trace-env+))
+         (trace-unknown (and trace-env (plusp (length trace-env))))
          (events (when events-path
                    (ignore-errors
                     (open events-path :direction :output
@@ -64,7 +75,8 @@ service->client events are appended to it as readable forms."
                                       :external-format :utf-8))))
          (sniff (when events
                   (lambda (channel body)
-                    (let ((event (frame->event channel body)))
+                    (let ((event (frame->event channel body
+                                               :trace-unknown trace-unknown)))
                       (when event (write-event events event))))))
          (proc (uiop:launch-program (list real-service)
                                     :input :stream

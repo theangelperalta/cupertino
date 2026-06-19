@@ -38,12 +38,17 @@ build graph that was up to date and didn't need to run. Only meaningful in
 --use-swb mode, where the task total and per-task starts are known, so it
 defaults on whenever SWB interception is active (see RUN-XCODEBUILD).")
 
+(defparameter *xcbuild-emit-prefix* nil
+  "When set (a cell label), xcbuild-emit prefixes each scrollback line with it so
+parallel runs' diagnostics stay attributable to their scheme/destination.")
+
 (defstruct xcbuild-job
   "One in-progress action shown on the live dashboard."
   (id nil)                              ; SWB task id, for precise start/end matching
   (label "")                            ; left-hand text, e.g. "Foo.swift"
   (kind "")                             ; action verb, e.g. "compile"
   (test nil)                            ; T for a running test suite
+  (resolve nil)                         ; T for an SPM package-resolution row
   (passed 0)                            ; (test jobs) test cases passed so far
   (failed 0)                            ; (test jobs) test cases failed so far
   (start (get-internal-real-time)))
@@ -65,7 +70,14 @@ defaults on whenever SWB interception is active (see RUN-XCODEBUILD).")
   (tests-failed 0)
   (jobs '())                            ; oldest-first list of xcbuild-job
   (seen-diags (make-hash-table :test 'equal)) ; dedup (kind . message) (SWB mode)
+  (targets-started 0)                   ; BUILD_TARGET_STARTED count (SWB)
+  (targets-ended 0)                     ; BUILD_TARGET_ENDED count (SWB)
+  (console-outputs 0)                   ; BUILD_CONSOLE_OUTPUT_EMITTED count (SWB)
+  ;; Lazily allocated -- only the --swb-trace path ever populates this, so the
+  ;; common case avoids an unused hash-table per stats instance.
+  (unknown-msgs nil)                    ; NIL or hash-table: name -> count
   (start-time (get-internal-real-time))
+  (phase :build)                        ; :build until `Testing started', then :test
   (result nil))                         ; :success / :failure, set on finalize
 
 (defun xcbuild-action-verb (action)
@@ -75,6 +87,24 @@ defaults on whenever SWB interception is active (see RUN-XCODEBUILD).")
         ((string= action "clean") "Cleaning")
         ((string= action "archive") "Archiving")
         (t (string-capitalize action))))
+
+(defun xcbuild-phase-label (stats)
+  "Per-cell phase indicator for a `test' action, NIL otherwise. A `test' run has
+two phases: building the test bundles (\"Building\") then running them
+(\"Testing\"); other actions have a single phase so need no indicator."
+  (when (string= (xcbuild-stats-action stats) "test")
+    (if (eq (xcbuild-stats-phase stats) :test) "Testing" "Building")))
+
+(defun xcbuild-result-banner-text (stats text)
+  "Relabel xcodebuild's `** TEST SUCCEEDED/FAILED **' banner when it is really the
+build-for-testing result (action is `test' but the test phase has not started),
+so it is not mistaken for the final test verdict. Other banners pass through."
+  (if (and (string= (xcbuild-stats-action stats) "test")
+           (eq (xcbuild-stats-phase stats) :build))
+      (cond ((string= text "** TEST SUCCEEDED **") "** BUILD FOR TESTING SUCCEEDED **")
+            ((string= text "** TEST FAILED **") "** BUILD FOR TESTING FAILED **")
+            (t text))
+      text))
 
 (defun xcbuild-elapsed (start)
   "Elapsed wall-clock seconds since internal real-time START, as a float."
@@ -115,20 +145,83 @@ the dashboard shows the suites currently producing results."
           (append (remove job (xcbuild-stats-jobs stats)) (list job)))
     (xcbuild-trim-jobs stats)))
 
+(defun xcbuild-retire-suite (stats suite)
+  "Remove any live-dashboard row whose test SUITE matches. No-op when SUITE
+is NIL or no matching row exists. Called when xcodebuild announces a suite's
+completion so finished suites don't linger until the sliding window evicts them."
+  (when suite
+    (setf (xcbuild-stats-jobs stats)
+          (remove-if (lambda (j)
+                       (and (xcbuild-job-test j)
+                            (string= (xcbuild-job-label j) suite)))
+                     (xcbuild-stats-jobs stats)))))
+
+(defun xcbuild-bump-package (stats name kind)
+  "Create or refresh the live SPM resolution row for package NAME with action
+KIND, marking it most-recently-active so the dashboard shows the packages
+currently resolving. NAME is NIL-safe (no-op)."
+  (when name
+    (let ((job (find-if (lambda (j)
+                          (and (xcbuild-job-resolve j)
+                               (string= (xcbuild-job-label j) name)))
+                        (xcbuild-stats-jobs stats))))
+      (unless job
+        (setf job (make-xcbuild-job :label name :resolve t)))
+      (setf (xcbuild-job-kind job) kind)
+      (setf (xcbuild-stats-jobs stats)
+            (append (remove job (xcbuild-stats-jobs stats)) (list job)))
+      (xcbuild-trim-jobs stats))))
+
+(defun xcbuild-retire-packages (stats)
+  "Remove all live SPM resolution rows once xcodebuild announces resolution is
+complete, so they don't linger until the sliding window evicts them."
+  (setf (xcbuild-stats-jobs stats)
+        (remove-if #'xcbuild-job-resolve (xcbuild-stats-jobs stats))))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Styled span/line helpers
 ;;; ---------------------------------------------------------------------------
 
+(defun xcbuild-space-like-p (ch)
+  "True for any whitespace or non-graphic character, including the Unicode
+spaces (thin space, NBSP, ...) that Swift Build uses in its strings."
+  (let ((c (char-code ch)))
+    (or (char= ch #\Space)
+        (member c '(9 10 11 12 13 133 160 5760 8232 8233 8239 8287 8203 12288))
+        (<= 8192 c 8202)
+        (not (graphic-char-p ch)))))
+
+(defun xcbuild-normalize-ws (string)
+  "Replace every non-space whitespace character in STRING with a regular space
+so the result is valid supercons span content. Preserves length and visual
+structure; does not collapse runs or trim."
+  (if (stringp string)
+      (map 'string (lambda (ch)
+                     (if (and (not (char= ch #\Space))
+                              (xcbuild-space-like-p ch))
+                         #\Space
+                         ch))
+           string)
+      string))
+
 (defun xcbuild-span (string &rest style-fns)
   "Make a supercons span for STRING with STYLE-FNS applied left to right
-\(e.g. #'sc:green #'sc:bold). With no STYLE-FNS, an unstyled span."
-  (if style-fns
-      (sc:make-span-styled
-       (reduce (lambda (acc fn) (funcall fn acc)) style-fns :initial-value string))
-      (sc:make-span-unstyled string)))
+\(e.g. #'sc:green #'sc:bold). With no STYLE-FNS, an unstyled span. STRING is
+normalized so any non-space whitespace (tabs, embedded newlines, NBSP, ...) is
+replaced with a regular space, since supercons rejects such characters."
+  (let ((string (xcbuild-normalize-ws string)))
+    (if style-fns
+        (sc:make-span-styled
+         (reduce (lambda (acc fn) (funcall fn acc)) style-fns :initial-value string))
+        (sc:make-span-unstyled string))))
 
 (defun xcbuild-emit (console &rest spans)
-  "Emit a single log line built from SPANS above CONSOLE's canvas."
+  "Emit a single log line built from SPANS above CONSOLE's canvas. When
+*xcbuild-emit-prefix* is set, prepend a dim [label] tag so parallel diagnostics
+stay attributable."
+  (when *xcbuild-emit-prefix*
+    (setf spans (cons (xcbuild-span (format nil "[~A] " *xcbuild-emit-prefix*) #'sc:dim)
+                      spans)))
   (sc:superconsole-emit console
                         (sc:make-lines (list (sc:make-line spans)))))
 
@@ -178,8 +271,12 @@ disabled or no task total is known yet."
 
 (defun xcbuild-counts-string (stats)
   "buck2-style job summary, e.g.
-\"Jobs: In progress: 8. Finished: 412. Warnings: 1. Errors: 0. Time elapsed: 31.3s\"."
-  (format nil "Jobs: In progress: ~D. Finished: ~D.~@[ Skipped: ~D.~]~@[ Warnings: ~D.~]~@[ Errors: ~D.~]~@[ Tests: ~A.~]~@[ Progress: ~A.~]~@[ ~A.~] Time elapsed: ~,1Fs"
+\"Jobs: In progress: 8. Finished: 412. Warnings: 1. Errors: 0. Time elapsed: 31.3s\".
+Note: target counters are deliberately NOT shown here -- BUILD_TARGET_STARTED
+arrives incrementally, so a mid-build \"K/N\" ratio would have a denominator
+that keeps climbing. Target counts surface in the post-build final summary."
+  (format nil "~@[~A · ~]Jobs: In progress: ~D. Finished: ~D.~@[ Skipped: ~D.~]~@[ Warnings: ~D.~]~@[ Errors: ~D.~]~@[ Tests: ~A.~]~@[ Progress: ~A.~]~@[ ~A.~] Time elapsed: ~,1Fs"
+          (xcbuild-phase-label stats)
           (length (xcbuild-stats-jobs stats))
           (xcbuild-stats-finished stats)
           (when (plusp (xcbuild-stats-skipped stats)) (xcbuild-stats-skipped stats))
@@ -196,10 +293,12 @@ disabled or no task total is known yet."
 
 (defun xcbuild-final-summary (stats)
   "One-line completion summary for the final frame, e.g.
-\"(417 compiled, 1 warning, 0 errors) in 31.3s\"."
-  (format nil "(~D compiled~@[, ~D skipped~], ~D warning~:P, ~D error~:P~@[, tests ~A~]~@[, ~A~]) in ~,1Fs"
+\"(417 compiled, 6 targets, 1 warning, 0 errors) in 31.3s\"."
+  (format nil "(~D compiled~@[, ~D skipped~]~@[, ~D target~:P~], ~D warning~:P, ~D error~:P~@[, tests ~A~]~@[, ~A~]) in ~,1Fs"
           (xcbuild-stats-compiled stats)
           (when (plusp (xcbuild-stats-skipped stats)) (xcbuild-stats-skipped stats))
+          (when (plusp (xcbuild-stats-targets-ended stats))
+            (xcbuild-stats-targets-ended stats))
           (xcbuild-stats-warnings stats)
           (xcbuild-stats-errors stats)
           (when (or (plusp (xcbuild-stats-tests-passed stats))
@@ -259,15 +358,18 @@ go red once past *xcbuild-slow-threshold*; test suites go red once any case fail
                        collect (xcbuild-job-line job width))))))
       (:final
        (let* ((noun (string-capitalize (xcbuild-stats-action stats)))
-              (suffix (xcbuild-final-summary stats)))
+              (suffix (xcbuild-final-summary stats))
+              (success-p (eq (xcbuild-stats-result stats) :success))
+              (color (if success-p #'sc:green #'sc:red))
+              (verb (if success-p "Succeeded" "Failed")))
+         ;; The xcodebuild-style '** ACTION SUCCEEDED/FAILED **' banner is now
+         ;; printed by run-xcodebuild after report-result-bundles, so the
+         ;; verdict sits below any result-bundle section. The canvas closes
+         ;; with the per-cell summary line only.
          (sc:make-lines
-          (list (if (eq (xcbuild-stats-result stats) :success)
-                    (sc:make-line
-                     (list (xcbuild-span (format nil "   ~A Succeeded " noun) #'sc:green #'sc:bold)
-                           (xcbuild-span suffix #'sc:dim)))
-                    (sc:make-line
-                     (list (xcbuild-span (format nil "   ~A Failed " noun) #'sc:red #'sc:bold)
-                           (xcbuild-span suffix #'sc:dim)))))))))))
+          (list (sc:make-line
+                 (list (xcbuild-span (format nil "   ~A ~A " noun verb) color #'sc:bold)
+                       (xcbuild-span suffix #'sc:dim))))))))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Driver
@@ -291,6 +393,18 @@ verbatim)."
        (xcbuild-start-job stats "copy" text))
       (:codesign
        (xcbuild-start-job stats "sign" text))
+      ;; Swift Package Manager resolution: the kickoff line scrolls as a bold
+      ;; header; each per-package activity line drives a live row; the completion
+      ;; summary retires all resolution rows. Cold (uncached) resolution is the
+      ;; one pre-build phase that can run for a while with nothing else going on,
+      ;; so surfacing it keeps the dashboard from looking hung.
+      (:package-resolve-start
+       (xcbuild-emit console (xcbuild-span text #'sc:bold)))
+      (:package-fetch
+       (xcbuild-bump-package stats (xcbuild-package-name text)
+                             (xcbuild-package-kind text)))
+      (:package-resolved
+       (xcbuild-retire-packages stats))
       (:phase
        (xcbuild-emit console (xcbuild-span text #'sc:bold)))
       (:warning
@@ -303,8 +417,9 @@ verbatim)."
                      (xcbuild-span text #'sc:red)))
       (:testing-start
        ;; The build phase is over; clear its jobs so the dashboard now tracks
-       ;; running test suites.
+       ;; running test suites, and flip the phase so the header/banner relabel.
        (setf (xcbuild-stats-jobs stats) nil)
+       (setf (xcbuild-stats-phase stats) :test)
        (xcbuild-emit console (xcbuild-span text #'sc:bold)))
       (:test-case-passed
        (incf (xcbuild-stats-tests-passed stats))
@@ -322,9 +437,14 @@ verbatim)."
       ;; "started" lines (often all announced up front) need no handling.
       (:test-suite-start nil)
       (:test-suite-summary
+       ;; Retire the suite's live-dashboard row so completed suites don't linger
+       ;; until the sliding window evicts them. The run-level `Executed N tests'
+       ;; rollup returns NIL and is left as a scrollback-only line.
+       (xcbuild-retire-suite stats (xcbuild-test-summary-suite-name text))
        (xcbuild-emit console (xcbuild-span "    ") (xcbuild-span text #'sc:dim)))
       ((:result-success :result-failure)
-       (xcbuild-emit console (xcbuild-span text #'sc:bold)))
+       (xcbuild-emit console
+                     (xcbuild-span (xcbuild-result-banner-text stats text) #'sc:bold)))
       (:unknown
        ;; Context lines belonging to a diagnostic (source + caret): show verbatim.
        (when (and in-diagnostic (plusp (length (string-trim " " text))))
@@ -335,6 +455,25 @@ verbatim)."
       ((:error :warning) t)
       (:unknown in-diagnostic)
       (t nil))))
+
+(defparameter *xcbuild-swb-text-types*
+  '(:testing-start :test-suite-start :test-case-passed :test-case-failed
+    :test-suite-summary :result-success :result-failure
+    :package-resolve-start :package-fetch :package-resolved)
+  "Classified line types the SWB dashboard accepts from xcodebuild's text stream.
+In --use-swb mode the build graph is driven by protocol events, but the
+test-execution and SPM-resolution phases emit no SWB events; these line types
+let those phases still drive the dashboard. Build-graph types
+(:compile/:link/:warning/...) are excluded here so they are not double-counted
+against the protocol events.")
+
+(defun xcbuild-swb-text-event (line)
+  "Classify a raw xcodebuild text LINE for the SWB dashboard, returning the
+classified event plist only when LINE is a test-execution line the SWB path
+should apply (see *xcbuild-swb-text-types*); otherwise NIL."
+  (let ((event (classify-xcodebuild-line line)))
+    (when (member (getf event :type) *xcbuild-swb-text-types*)
+      event)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Swift Build (SWBBuildService) structured events
@@ -357,15 +496,6 @@ Returns NIL on anything unparseable."
   "First non-empty string among CANDIDATES, or \"task\"."
   (or (find-if (lambda (x) (and (stringp x) (plusp (length x)))) candidates)
       "task"))
-
-(defun xcbuild-space-like-p (ch)
-  "True for any whitespace or non-graphic character, including the Unicode
-spaces (thin space, NBSP, ...) that Swift Build uses in its strings."
-  (let ((c (char-code ch)))
-    (or (char= ch #\Space)
-        (member c '(9 10 11 12 13 133 160 5760 8232 8233 8239 8287 8203 12288))
-        (<= 8192 c 8202)
-        (not (graphic-char-p ch)))))
 
 (defun xcbuild-clean (string)
   "Make STRING safe for a supercons span: collapse every run of whitespace
@@ -430,24 +560,61 @@ diagnostic at several scopes; dedup so counts match what a human expects."
     (unless (gethash key table)
       (setf (gethash key table) t))))
 
+(defun swb-diag-location (h)
+  "Pull (PATH LINE COLUMN) out of a BUILD_DIAGNOSTIC_EMITTED `location' hash.
+Swift's default Codable encoding for the location enum yields one of
+  {\"unknown\":{}}
+  {\"path\":{\"_0\":\"<file>\",\"fileLocation\":null}}
+  {\"path\":{\"_0\":\"<file>\",\"fileLocation\":{\"textual\":{\"line\":N,\"column\":N}}}}
+so we probe path → fileLocation → textual defensively, returning whatever
+fields are present. PATH is a non-empty string or NIL; LINE/COLUMN are
+positive integers or NIL."
+  (let* ((loc (and (hash-table-p h) (gethash "location" h)))
+         (path-cell (and (hash-table-p loc) (gethash "path" loc)))
+         (path (and (hash-table-p path-cell) (gethash "_0" path-cell)))
+         (file-loc (and (hash-table-p path-cell) (gethash "fileLocation" path-cell)))
+         (textual (and (hash-table-p file-loc) (gethash "textual" file-loc)))
+         (line (and (hash-table-p textual) (gethash "line" textual)))
+         (col (and (hash-table-p textual) (gethash "column" textual))))
+    (values (and (stringp path) (plusp (length path)) path)
+            (and (integerp line) (plusp line) line)
+            (and (integerp col) (plusp col) col))))
+
+(defun swb-diag-location-prefix (path line column)
+  "Format `path:line:col: ' (with whatever fields are non-NIL) or NIL when
+PATH is NIL. Mirrors the leading prefix clang/swift bake into text-mode
+diagnostics, so SWB-mode scrollback reads the same way."
+  (when path
+    (with-output-to-string (out)
+      (write-string path out)
+      (when line
+        (format out ":~D" line)
+        (when column (format out ":~D" column)))
+      (write-string ": " out))))
+
 (defun xcbuild-swb-diagnostic (console stats arg)
   "Handle a BUILD_DIAGNOSTIC_EMITTED payload. kind 1 = warning, 2 = error;
-0 (note) is ignored to keep the scrollback quiet."
+0 (note) is ignored to keep the scrollback quiet. When the payload carries a
+source location, prepend `path:line:col: ' to the scrolled text so users see
+the same `file.swift:42:10: warning: foo' shape they get in text mode."
   (let ((h (swb-arg-json arg)))
     (when h
       (let ((kind (gethash "kind" h))
             (msg (xcbuild-clean (or (gethash "message" h) ""))))
-        (cond
-          ((and (eql kind 1) (xcbuild-swb-new-diag-p stats kind msg))
-           (incf (xcbuild-stats-warnings stats))
-           (when console
-             (xcbuild-emit console (xcbuild-span "    warning " #'sc:yellow #'sc:bold)
-                           (xcbuild-span msg))))
-          ((and (eql kind 2) (xcbuild-swb-new-diag-p stats kind msg))
-           (incf (xcbuild-stats-errors stats))
-           (when console
-             (xcbuild-emit console (xcbuild-span "      error " #'sc:red #'sc:bold)
-                           (xcbuild-span msg #'sc:red)))))))))
+        (multiple-value-bind (path line column) (swb-diag-location h)
+          (let* ((prefix (swb-diag-location-prefix path line column))
+                 (full (if prefix (concatenate 'string prefix msg) msg)))
+            (cond
+              ((and (eql kind 1) (xcbuild-swb-new-diag-p stats kind full))
+               (incf (xcbuild-stats-warnings stats))
+               (when console
+                 (xcbuild-emit console (xcbuild-span "    warning " #'sc:yellow #'sc:bold)
+                               (xcbuild-span full))))
+              ((and (eql kind 2) (xcbuild-swb-new-diag-p stats kind full))
+               (incf (xcbuild-stats-errors stats))
+               (when console
+                 (xcbuild-emit console (xcbuild-span "      error " #'sc:red #'sc:bold)
+                               (xcbuild-span full #'sc:red)))))))))))
 
 (defun xcbuild-progress-total (string)
   "Parse the denominator from a \"completed / total\" progress STRING, or NIL.
@@ -477,16 +644,128 @@ total seen, which is the build-graph size used for the cache-hit percentage."
           (setf (xcbuild-stats-result stats)
                 (if (zerop status) :success :failure)))))))
 
+(defun xcbuild-swb-ensure-unknown-table (stats)
+  "Allocate STATS's unknown-msgs hash-table on first use; return it. Lets the
+common (no --swb-trace) path skip the allocation entirely."
+  (or (xcbuild-stats-unknown-msgs stats)
+      (setf (xcbuild-stats-unknown-msgs stats) (make-hash-table :test 'equal))))
+
+(defun xcbuild-swb-unknown (console stats event)
+  "Scroll a dim trace line the first time a wire message NAME is seen, and bump
+its repeat count thereafter. Driven by --swb-trace / CUPERTINO_SWB_TRACE."
+  (let ((name (getf event :name)))
+    (when (stringp name)
+      (let* ((table (xcbuild-swb-ensure-unknown-table stats))
+             (prior (gethash name table 0)))
+        (setf (gethash name table) (1+ prior))
+        (when (and (zerop prior) console)
+          (xcbuild-emit console
+                        (xcbuild-span "    swb-trace " #'sc:dim #'sc:bold)
+                        (xcbuild-span name #'sc:dim)))))))
+
+(defparameter *xcbuild-trace-digest-cap* 8
+  "Maximum number of (name . count) entries shown inline in the SWB trace
+digest line. Overflow becomes `… (and N more)`; the full list still lives
+in the --swb-trace-file transcript when one was requested.")
+
+(defun xcbuild-stats-unknown-entries (stats)
+  "Sorted ((NAME . COUNT) ...) for STATS's unknown-msgs table, hottest first.
+Returns NIL if the table was never allocated."
+  (let ((table (xcbuild-stats-unknown-msgs stats)))
+    (when table
+      (let (acc)
+        (maphash (lambda (k v) (push (cons k v) acc)) table)
+        (sort acc #'> :key #'cdr)))))
+
+(defun xcbuild-trace-digest-body (entries console-outputs)
+  "Format a comma-separated digest body, capped at *XCBUILD-TRACE-DIGEST-CAP*.
+Returns NIL when ENTRIES is empty and CONSOLE-OUTPUTS is zero."
+  (let ((all (append (mapcar (lambda (e) (format nil "~A ×~D" (car e) (cdr e)))
+                             entries)
+                     (when (plusp console-outputs)
+                       (list (format nil "console-output ×~D" console-outputs))))))
+    (cond ((null all) nil)
+          ((<= (length all) *xcbuild-trace-digest-cap*)
+           (format nil "~{~A~^, ~}" all))
+          (t (format nil "~{~A~^, ~}, … (and ~D more)"
+                     (subseq all 0 *xcbuild-trace-digest-cap*)
+                     (- (length all) *xcbuild-trace-digest-cap*))))))
+
+(defun xcbuild-emit-trace-combined (console all-stats)
+  "Cross-cell digest: sum unknown-msg counts and BUILD_CONSOLE_OUTPUT counters
+across every cell's stats and scroll a single 'swb-trace combined:' line. A
+no-op when ALL-STATS is a single cell (the per-cell line already covers it),
+or when no trace data accrued, or when CONSOLE is NIL."
+  (when (and console (rest all-stats))
+    (let* ((combined (make-xcbuild-stats :action ""))
+           (table nil))
+      (dolist (s all-stats)
+        (incf (xcbuild-stats-console-outputs combined)
+              (xcbuild-stats-console-outputs s))
+        (let ((src (xcbuild-stats-unknown-msgs s)))
+          (when src
+            (unless table
+              (setf table (xcbuild-swb-ensure-unknown-table combined)))
+            (maphash (lambda (k v) (incf (gethash k table 0) v)) src))))
+      (xcbuild-emit-trace-digest console combined
+                                 :prefix "swb-trace combined: "))))
+
+(defun xcbuild-combined-banner-text (action success-p)
+  "Return the '** ACTION SUCCEEDED **' / '** ACTION FAILED **' verdict string
+for ACTION (case-insensitive); ACTION is uppercased to match xcodebuild's own
+banner verbiage (BUILD/TEST/CLEAN/ARCHIVE)."
+  (format nil "** ~A ~A **"
+          (string-upcase action)
+          (if success-p "SUCCEEDED" "FAILED")))
+
+(defun print-build-banner (action success-p &optional (stream t))
+  "Print the bold green/red '** ACTION SUCCEEDED/FAILED **' verdict line to
+STREAM (default *standard-output*). Called by run-xcodebuild after
+report-result-bundles so the verdict is the very last line of the build."
+  (let ((text (xcbuild-combined-banner-text action success-p))
+        (code (if success-p "32" "31")))
+    (format stream "~C[1;~Am~A~C[0m~%" #\Escape code text #\Escape)))
+
+(defun xcbuild-emit-trace-digest (console stats &key trace-file (prefix "swb-trace digest: "))
+  "After the build, scroll a one-line summary of every wire message the proxy
+emitted that we did not handle, plus the BUILD_CONSOLE_OUTPUT count if nonzero.
+When TRACE-FILE is non-NIL it is mentioned so the user knows where the full
+transcript landed. PREFIX lets the combined-cells rollup use a distinct label.
+A no-op when no trace data accrued or CONSOLE is NIL."
+  (when console
+    (let* ((entries (xcbuild-stats-unknown-entries stats))
+           (console-outputs (xcbuild-stats-console-outputs stats))
+           (body (xcbuild-trace-digest-body entries console-outputs)))
+      (when (or body trace-file)
+        (xcbuild-emit console
+                      (xcbuild-span (concatenate 'string "    " prefix) #'sc:dim #'sc:bold)
+                      (xcbuild-span (or body "(no untyped events)") #'sc:dim))
+        (when trace-file
+          (xcbuild-emit console
+                        (xcbuild-span "    swb-trace file:   " #'sc:dim #'sc:bold)
+                        (xcbuild-span (namestring trace-file) #'sc:dim)))))))
+
 (defun xcbuild-handle-event (console stats event)
   "Apply one decoded SWB EVENT (a plist from swb:frame->event) to STATS,
-emitting scrollback via CONSOLE for diagnostics."
+emitting scrollback via CONSOLE for diagnostics. The :BUILD-STARTED event is a
+no-op (the dashboard start-time is captured at stats construction). The
+:CONSOLE-OUTPUT event is counted only -- under SWB mode xcodebuild's stdout
+usually carries the same lines, so emitting here would double-print; the count
+is surfaced in the end-of-build trace digest so users running --swb-trace can
+notice if the assumption fails (e.g. a high count with empty xcodebuild output
+would warrant decoding the payload)."
   (let ((arg (first (getf event :args))))
     (case (getf event :type)
-      (:task-started  (xcbuild-swb-task-started stats arg))
-      (:task-ended    (xcbuild-swb-task-ended stats arg))
-      (:diagnostic    (xcbuild-swb-diagnostic console stats arg))
-      (:progress      (xcbuild-swb-progress stats arg))
-      (:build-ended   (xcbuild-swb-build-ended stats arg))
+      (:build-started nil)
+      (:target-started (incf (xcbuild-stats-targets-started stats)))
+      (:target-ended   (incf (xcbuild-stats-targets-ended stats)))
+      (:task-started   (xcbuild-swb-task-started stats arg))
+      (:task-ended     (xcbuild-swb-task-ended stats arg))
+      (:diagnostic     (xcbuild-swb-diagnostic console stats arg))
+      (:console-output (incf (xcbuild-stats-console-outputs stats)))
+      (:progress       (xcbuild-swb-progress stats arg))
+      (:build-ended    (xcbuild-swb-build-ended stats arg))
+      (:unknown        (xcbuild-swb-unknown console stats event))
       (t nil))))
 
 ;;; ---------------------------------------------------------------------------
@@ -543,6 +822,7 @@ Return the xcodebuild exit code."
         (setf done t)
         (when render-thread (ignore-errors (bt:join-thread render-thread)))
         ;; Always draw the final frame so the cursor/canvas is restored, even if
-        ;; reading the stream errors out partway through.
+        ;; reading the stream errors out partway through. The verdict banner is
+        ;; the second line of xcbuild-progress's :final canvas.
         (when (sc:superconsole-output console)
           (sc:superconsole-finalize console progress))))))

@@ -32,6 +32,35 @@
                 #\Escape color-code text #\Escape *ansi-reset*)
         (format nil "~A" text))))
 
+;;; ---------------------------------------------------------------------------
+;;; Diagnostic message helpers
+;;; ---------------------------------------------------------------------------
+;;;
+;;; Three thin macros around FORMAT for the recurring `~A <msg>~%' shape, where
+;;; ~A is a coloured `Error:' / `Warning:' / `Note:' prefix. Kept as macros
+;;; (not functions) so the user-supplied control string stays a compile-time
+;;; literal and SBCL keeps warning on format-arg-count mismatches at the call
+;;; site -- which it can't do once a control string is hidden behind &rest +
+;;; APPLY. The trailing ~% is appended so call sites don't have to repeat it.
+
+(defmacro cup-error (control &rest args)
+  "Print a red `Error:' prefixed message to *error-output*. CONTROL is a FORMAT
+control string (without the prefix or trailing newline)."
+  `(format *error-output* ,(concatenate 'string "~A " control "~%")
+           (colored-text "Error:" :red) ,@args))
+
+(defmacro cup-warn (control &rest args)
+  "Print a yellow `Warning:' prefixed message to *error-output*. CONTROL is a
+FORMAT control string (without the prefix or trailing newline)."
+  `(format *error-output* ,(concatenate 'string "~A " control "~%")
+           (colored-text "Warning:" :yellow) ,@args))
+
+(defmacro cup-note (control &rest args)
+  "Print a yellow `Note:' prefixed informational message to *standard-output*.
+CONTROL is a FORMAT control string (without the prefix or trailing newline)."
+  `(format t ,(concatenate 'string "~A " control "~%")
+           (colored-text "Note:" :yellow) ,@args))
+
 ;;; Determine color based on text value
 (defun text-value-to-color (text)
   "Determine color based on the content/value of TEXT."
