@@ -95,20 +95,23 @@ because it carries its own quoting -- safer once that is built via this helper."
     (write-char #\' out)))
 
 (defun xcodebuild-command-string (project-flag scheme destination configuration
-                                  derived-data-path action &optional result-bundle-path)
+                                  derived-data-path action
+                                  &optional result-bundle-path extra-args)
   "Build a single xcodebuild command string for one scheme/destination cell.
 When RESULT-BUNDLE-PATH is given, add -resultBundlePath so the .xcresult lands
-at a known location cupertino can report at the end of the run. User-supplied
-strings are run through SHELL-QUOTE-SINGLE so embedded spaces or quotes are
-safe."
-  (format nil "xcodebuild ~A -scheme ~A -destination ~A -configuration ~A~@[ -derivedDataPath ~A~]~@[ -resultBundlePath ~A~] ~A"
+at a known location cupertino can report at the end of the run. EXTRA-ARGS, if
+non-empty, is appended after the action verb (e.g. test-action filters like
+-only-testing:...). User-supplied strings are run through SHELL-QUOTE-SINGLE so
+embedded spaces or quotes are safe."
+  (format nil "xcodebuild ~A -scheme ~A -destination ~A -configuration ~A~@[ -derivedDataPath ~A~]~@[ -resultBundlePath ~A~] ~A~@[ ~A~]"
           project-flag
           (shell-quote-single scheme)
           (shell-quote-single destination)
           configuration
           (when derived-data-path (shell-quote-single derived-data-path))
           (when result-bundle-path (shell-quote-single result-bundle-path))
-          action))
+          action
+          (when (and extra-args (plusp (length extra-args))) extra-args)))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Per-cell DerivedData isolation
@@ -239,11 +242,13 @@ Returns NIL when SPEC has no `@' separator."
       (t ""))))
 
 (defun build-cell (project-flag scheme destination configuration derived-data-path
-                   action labeled)
+                   action labeled &key extra-args)
   "Construct one matrix-cell plist for SCHEME on DESTINATION. When LABELED, the
 panel label includes the destination; otherwise it is just the scheme. For the
 test action the cell carries an :xcresult path (also wired into the command as
--resultBundlePath) so the produced .xcresult can be reported at the end."
+-resultBundlePath) so the produced .xcresult can be reported at the end.
+EXTRA-ARGS is forwarded to XCODEBUILD-COMMAND-STRING (e.g. -only-testing
+filters)."
   (let ((xcresult (when (string= action "test")
                     (cell-result-bundle-path derived-data-path scheme destination))))
     (list :scheme scheme :dest destination
@@ -253,10 +258,10 @@ test action the cell carries an :xcresult path (also wired into the command as
           :xcresult xcresult
           :cmd (xcodebuild-command-string
                 project-flag scheme destination configuration
-                derived-data-path action xcresult))))
+                derived-data-path action xcresult extra-args))))
 
 (defun resolve-cells (cmd action project-flag configuration derived-data-path
-                      model scheme-accessors cell-accessors)
+                      model scheme-accessors cell-accessors &key extra-args)
   "Resolve the list of matrix cells to run. Cells come from repeatable --cell
 options, else from config (:cells/:test-cells via CELL-ACCESSORS); each is an
 explicit scheme@destination pairing (no Cartesian product). With no cells, the
@@ -314,7 +319,7 @@ shared XCBuildData/build.db SQLite lock."
                         (if multi
                             (cell-derived-data-dir base-dir sch dest)
                             derived-data-path)
-                        action labeled)))))
+                        action labeled :extra-args extra-args)))))
 
 (defun no-cells-resolvable-p (cmd model scheme-accessors cell-accessors)
   "True when CMD/MODEL supply nothing that RESOLVE-CELLS could turn into a cell:
@@ -408,7 +413,11 @@ runs standalone (no xcodebuild clean)."
          (project-flag (resolve-project-flag cmd model))
          (configuration (clingon:getopt cmd :configuration))
          (derived-data-path (clingon:getopt cmd :derived-data))
-         (prune (and (string= action "clean") (clingon:getopt cmd :prune))))
+         (prune (and (string= action "clean") (clingon:getopt cmd :prune)))
+         (extra-args (when (string= action "test")
+                       (build-test-filter-args
+                        (alexandria:ensure-list (clingon:getopt cmd :only-testing))
+                        (alexandria:ensure-list (clingon:getopt cmd :skip-testing))))))
     (when prune (prune-isolated-derived-data))
     (let ((cells (if (and prune (no-cells-resolvable-p cmd model
                                                        scheme-accessors
@@ -417,7 +426,7 @@ runs standalone (no xcodebuild clean)."
                      (return-from run-xcodebuild)
                      (resolve-cells cmd action project-flag configuration
                                     derived-data-path model scheme-accessors
-                                    cell-accessors))))
+                                    cell-accessors :extra-args extra-args))))
     (let* ((*xcbuild-max-jobs* (or (model-max-jobs model) *xcbuild-max-jobs*))
            (*xcbuild-slow-threshold* (or (model-slow-threshold model)
                                          *xcbuild-slow-threshold*))
@@ -790,6 +799,18 @@ When MULTI, --scheme/--sim/--device are repeatable (clingon :list) and --jobs an
        :description "abort remaining cells on the first failure"
        :long-name "fail-fast"
        :key :fail-fast)))
+   (when (string= action-description "test")
+     (list
+      (clingon:make-option
+       :list
+       :description "run only the given test identifier, formatted as TestTarget[/TestClass[/TestMethod]] (forwarded to xcodebuild as -only-testing:; repeatable)"
+       :long-name "only-testing"
+       :key :only-testing)
+      (clingon:make-option
+       :list
+       :description "skip the given test identifier, formatted as TestTarget[/TestClass[/TestMethod]] (forwarded to xcodebuild as -skip-testing:; repeatable)"
+       :long-name "skip-testing"
+       :key :skip-testing)))
    (when (string= action-description "clean")
      (list
       (clingon:make-option
@@ -797,3 +818,15 @@ When MULTI, --scheme/--sim/--device are repeatable (clingon :list) and --jobs an
        :description "also remove cupertino's per-cell DerivedData tree (~/Library/Developer/Xcode/DerivedData-cupertino/); runs standalone when no scheme/destination is given"
        :long-name "prune"
        :key :prune)))))
+
+(defun build-test-filter-args (only-testing skip-testing)
+  "Build the xcodebuild test-filter argument string from ONLY-TESTING and
+SKIP-TESTING (each a list of TestTarget[/TestClass[/TestMethod]] identifiers).
+Each identifier becomes one shell-quoted -only-testing:/-skip-testing: flag.
+Returns NIL when both lists are empty."
+  (let ((parts (nconc
+                (loop for id in only-testing
+                      collect (format nil "-only-testing:~A" (shell-quote-single id)))
+                (loop for id in skip-testing
+                      collect (format nil "-skip-testing:~A" (shell-quote-single id))))))
+    (when parts (format nil "~{~A~^ ~}" parts))))

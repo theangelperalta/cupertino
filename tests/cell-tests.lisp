@@ -563,3 +563,103 @@ produces for `xcrun simctl list --json' (object -> hash, array -> list)."
       (is (not (uiop:directory-exists-p (uiop:ensure-directory-pathname bundle))))
       (is (uiop:directory-exists-p
            (uiop:pathname-directory-pathname bundle))))))
+
+
+;;; -------------------------------------------------------------------------
+;;; Test action filters: --only-testing / --skip-testing
+;;; -------------------------------------------------------------------------
+
+(defun test-cmd (argv)
+  "Parse ARGV against the matrix (test) command, returning the clingon command."
+  (clingon:parse-command-line
+   (cupertino::make-xcodebuild-command "test" "Test") argv))
+
+(test build-test-filter-args/nil-when-both-empty
+  ;; Empty inputs collapse to NIL so xcodebuild-command-string's ~@[ ~A~]
+  ;; segment omits the trailing space entirely.
+  (is (null (cupertino::build-test-filter-args nil nil)))
+  (is (null (cupertino::build-test-filter-args '() '()))))
+
+(test build-test-filter-args/only-testing-emits-flag-per-id
+  (is (string= "-only-testing:'FooTests'"
+               (cupertino::build-test-filter-args (list "FooTests") nil)))
+  (is (string= "-only-testing:'FooTests/Bar' -only-testing:'FooTests/Baz/testQux'"
+               (cupertino::build-test-filter-args
+                (list "FooTests/Bar" "FooTests/Baz/testQux") nil))))
+
+(test build-test-filter-args/skip-testing-alone-has-no-leading-space
+  ;; A bare --skip-testing run must not produce a leading space that would
+  ;; double up against xcodebuild-command-string's own format separator.
+  (let ((s (cupertino::build-test-filter-args nil (list "FooTests/Slow"))))
+    (is (string= "-skip-testing:'FooTests/Slow'" s))
+    (is (not (char= #\Space (char s 0))))))
+
+(test build-test-filter-args/mixed-only-then-skip
+  ;; Order: every -only-testing first, then every -skip-testing, single-space
+  ;; joined throughout.
+  (is (string= "-only-testing:'A' -only-testing:'B' -skip-testing:'C' -skip-testing:'D'"
+               (cupertino::build-test-filter-args (list "A" "B")
+                                                  (list "C" "D")))))
+
+(test build-test-filter-args/shell-quotes-identifiers-with-spaces
+  ;; xcodebuild identifiers normally don't contain spaces, but we still pass
+  ;; user input through shell-quote-single so a stray space can't break the
+  ;; assembled command line.
+  (is (string= "-only-testing:'My Tests/Foo'"
+               (cupertino::build-test-filter-args (list "My Tests/Foo") nil))))
+
+(test xcodebuild-command-string/appends-extra-args-after-action
+  ;; Extras land after the action verb, single-space separated.
+  (let ((s (cupertino::xcodebuild-command-string
+            "-workspace 'X'" "S" "id=AAA" "Debug" nil "test" nil
+            "-only-testing:'FooTests'")))
+    (is (search " test -only-testing:'FooTests'" s)))
+  ;; Nil extras leave the action verb as the trailing token (no dangling space).
+  (let ((s (cupertino::xcodebuild-command-string
+            "-workspace 'X'" "S" "id=AAA" "Debug" nil "test")))
+    (is (string= " test" (subseq s (- (length s) 5)))))
+  ;; Empty-string extras are treated the same as nil.
+  (let ((s (cupertino::xcodebuild-command-string
+            "-workspace 'X'" "S" "id=AAA" "Debug" nil "test" nil "")))
+    (is (string= " test" (subseq s (- (length s) 5))))))
+
+(test test-command/forwards-only-and-skip-testing-into-cell-cmd
+  ;; End-to-end: --only-testing / --skip-testing parsed from argv flow through
+  ;; resolve-cells into each cell's xcodebuild command string, after the
+  ;; action verb (not before it).
+  (let* ((cmd (test-cmd (list "--cell" "iOS@platform=iOS Simulator,id=AAA"
+                              "--only-testing" "FooTests"
+                              "--only-testing" "FooTests/Bar"
+                              "--skip-testing" "FooTests/Slow")))
+         (model (test-model (list :project-path "App.xcworkspace")))
+         (extra-args (cupertino::build-test-filter-args
+                      (alexandria:ensure-list (clingon:getopt cmd :only-testing))
+                      (alexandria:ensure-list (clingon:getopt cmd :skip-testing))))
+         (cells (cupertino::resolve-cells
+                 cmd "test" "-workspace 'X'" "Debug" nil model
+                 (list #'model:model-schemes #'model:model-scheme)
+                 (list #'model:model-test-cells #'model:model-cells)
+                 :extra-args extra-args))
+         (cmd-str (getf (first cells) :cmd)))
+    (is (search "-only-testing:'FooTests'" cmd-str))
+    (is (search "-only-testing:'FooTests/Bar'" cmd-str))
+    (is (search "-skip-testing:'FooTests/Slow'" cmd-str))
+    (let ((test-pos (search " test " cmd-str))
+          (only-pos (search "-only-testing" cmd-str)))
+      (is (and test-pos only-pos (< test-pos only-pos))))))
+
+(test test-command/no-filters-leaves-cmd-clean
+  ;; Without --only-testing / --skip-testing, the test cell's cmd carries no
+  ;; filter flags (regression guard for the extra-args plumbing).
+  (let* ((cmd (test-cmd (list "--cell" "iOS@platform=iOS Simulator,id=AAA")))
+         (model (test-model (list :project-path "App.xcworkspace")))
+         (cells (run-resolve-test cmd model))
+         (cmd-str (getf (first cells) :cmd)))
+    (is (null (search "-only-testing" cmd-str)))
+    (is (null (search "-skip-testing" cmd-str)))))
+
+(test build-command/rejects-only-testing-flag
+  ;; --only-testing is a test-only option; the build subcommand must not
+  ;; accept it (regression guard for the (string= action-description "test")
+  ;; gate in xcodebuild-options).
+  (is (null (ignore-errors (build-cmd (list "--only-testing" "FooTests"))))))
