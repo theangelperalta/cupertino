@@ -3,104 +3,100 @@
 
 (in-package #:cupertino/tests)
 
-(def-suite cupertino-xcbuild-pretty
-  :description "Span sanitization helpers in xcbuild-pretty.")
-(in-suite cupertino-xcbuild-pretty)
-
 ;;; -------------------------------------------------------------------------
 ;;; xcbuild-normalize-ws
 ;;; -------------------------------------------------------------------------
 
-(test normalize-ws/leading-tab-becomes-space
-  (is (string= " /Users/foo/x.xcresult"
+(deftest normalize-ws/leading-tab-becomes-space
+  (ok (string= " /Users/foo/x.xcresult"
                (cupertino::xcbuild-normalize-ws
                 (format nil "~C/Users/foo/x.xcresult" #\Tab)))))
 
-(test normalize-ws/embedded-newline-and-cr
-  (is (string= "a b c"
+(deftest normalize-ws/embedded-newline-and-cr
+  (ok (string= "a b c"
                (cupertino::xcbuild-normalize-ws
                 (format nil "a~Cb~Cc" #\Newline #\Return)))))
 
-(test normalize-ws/nbsp-and-thin-space
-  (is (string= "x y z"
+(deftest normalize-ws/nbsp-and-thin-space
+  (ok (string= "x y z"
                (cupertino::xcbuild-normalize-ws
                 (format nil "x~Cy~Cz" (code-char 160) (code-char 8201))))))
 
-(test normalize-ws/preserves-regular-spaces-without-collapsing
-  (is (string= "a   b"
+(deftest normalize-ws/preserves-regular-spaces-without-collapsing
+  (ok (string= "a   b"
                (cupertino::xcbuild-normalize-ws "a   b"))))
 
-(test normalize-ws/preserves-length
+(deftest normalize-ws/preserves-length
   (let ((s (format nil "~C~Ca~C~Cb~C" #\Tab #\Newline #\Return
                                        (code-char 160) #\Tab)))
-    (is (= (length s) (length (cupertino::xcbuild-normalize-ws s))))))
+    (ok (= (length s) (length (cupertino::xcbuild-normalize-ws s))))))
 
-(test normalize-ws/clean-string-unchanged
-  (is (string= "no whitespace problems here"
+(deftest normalize-ws/clean-string-unchanged
+  (ok (string= "no whitespace problems here"
                (cupertino::xcbuild-normalize-ws
                 "no whitespace problems here"))))
 
-(test normalize-ws/non-string-passthrough
-  (is (eq :keyword (cupertino::xcbuild-normalize-ws :keyword))))
+(deftest normalize-ws/non-string-passthrough
+  (ok (eq :keyword (cupertino::xcbuild-normalize-ws :keyword))))
 
 ;;; -------------------------------------------------------------------------
 ;;; xcbuild-span (the actual crash site)
 ;;; -------------------------------------------------------------------------
 
-(test xcbuild-span/leading-tab-does-not-signal
+(deftest xcbuild-span/leading-tab-does-not-signal
   ;; Reproduces the original SPAN-ERROR-INVALID-WHITESPACE crash where
   ;; xcodebuild emitted a result-bundle path prefixed by a tab.
   (let* ((text (format nil "~C/Users/foo/x.xcresult" #\Tab))
          (span (finishes (cupertino::xcbuild-span text))))
-    (is (string= " /Users/foo/x.xcresult" (supercons:span-content span)))))
+    (ok (string= " /Users/foo/x.xcresult" (supercons:span-content span)))))
 
-(test xcbuild-span/styled-with-mixed-whitespace
+(deftest xcbuild-span/styled-with-mixed-whitespace
   (let* ((text (format nil "line~C~Cwith~Cws" #\Tab #\Newline #\Return))
          (span (finishes (cupertino::xcbuild-span text #'supercons:red))))
-    (is (string= "line  with ws" (supercons:span-content span)))))
+    (ok (string= "line  with ws" (supercons:span-content span)))))
 
-(test xcbuild-span/clean-input-roundtrips
+(deftest xcbuild-span/clean-input-roundtrips
   (let ((span (cupertino::xcbuild-span "plain text")))
-    (is (string= "plain text" (supercons:span-content span)))))
+    (ok (string= "plain text" (supercons:span-content span)))))
 
 
 ;;; -------------------------------------------------------------------------
 ;;; xcbuild-test-suite-name / xcbuild-test-summary-suite-name
 ;;; -------------------------------------------------------------------------
 
-(test test-suite-name/swift-stops-at-dot
+(deftest test-suite-name/swift-stops-at-dot
   ;; The dashboard-row label must be the suite alone — including the method
   ;; would create one row per test case, which is the bug behind the lingering
   ;; tvOS "Suite.method -- running (1✓)" rows.
-  (is (string= "SkyAVPlayerEngineTVTests"
+  (ok (string= "SkyAVPlayerEngineTVTests"
                (cupertino::xcbuild-test-suite-name
                 "Test case 'SkyAVPlayerEngineTVTests.testStop' passed on 'Apple TV 4K (3rd generation)' (0.123 seconds)"))))
 
-(test test-suite-name/objc-stops-at-space
-  (is (string= "MySuiteTests"
+(deftest test-suite-name/objc-stops-at-space
+  (ok (string= "MySuiteTests"
                (cupertino::xcbuild-test-suite-name
                 "Test Case '-[MySuiteTests testFoo]' passed (0.012 seconds)"))))
 
-(test test-suite-name/swift-failed-line
-  (is (string= "SuiteTests"
+(deftest test-suite-name/swift-failed-line
+  (ok (string= "SuiteTests"
                (cupertino::xcbuild-test-suite-name
                 "Test case 'SuiteTests.testBar()' failed (0.5 seconds)"))))
 
-(test test-suite-name/no-match-returns-nil
-  (is (null (cupertino::xcbuild-test-suite-name "not a test line"))))
+(deftest test-suite-name/no-match-returns-nil
+  (ok (null (cupertino::xcbuild-test-suite-name "not a test line"))))
 
-(test test-summary-suite-name/passed
-  (is (string= "SkyAVPlayerEngineTVTests"
+(deftest test-summary-suite-name/passed
+  (ok (string= "SkyAVPlayerEngineTVTests"
                (cupertino::xcbuild-test-summary-suite-name
                 "Test Suite 'SkyAVPlayerEngineTVTests' passed at 2026-06-18 09:59:37.000."))))
 
-(test test-summary-suite-name/failed
-  (is (string= "Foo.xctest"
+(deftest test-summary-suite-name/failed
+  (ok (string= "Foo.xctest"
                (cupertino::xcbuild-test-summary-suite-name
                 "Test Suite 'Foo.xctest' failed at 2026-06-18 09:59:37.000."))))
 
-(test test-summary-suite-name/executed-rollup-returns-nil
-  (is (null (cupertino::xcbuild-test-summary-suite-name
+(deftest test-summary-suite-name/executed-rollup-returns-nil
+  (ok (null (cupertino::xcbuild-test-summary-suite-name
              "Executed 76 tests, with 0 failures (0 unexpected) in 12.345 (12.567) seconds"))))
 
 ;;; -------------------------------------------------------------------------
@@ -109,28 +105,28 @@
 
 (defun bump (stats suite) (cupertino::xcbuild-bump-suite stats suite t))
 
-(test retire-suite/removes-only-matching-test-row
+(deftest retire-suite/removes-only-matching-test-row
   (let ((stats (cupertino::make-xcbuild-stats)))
     (bump stats "SuiteA") (bump stats "SuiteB") (bump stats "SuiteA")
-    (is (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
+    (ok (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
     (cupertino::xcbuild-retire-suite stats "SuiteA")
     (let ((jobs (cupertino::xcbuild-stats-jobs stats)))
-      (is (= 1 (length jobs)))
-      (is (string= "SuiteB" (cupertino::xcbuild-job-label (first jobs)))))))
+      (ok (= 1 (length jobs)))
+      (ok (string= "SuiteB" (cupertino::xcbuild-job-label (first jobs)))))))
 
-(test retire-suite/nil-suite-is-noop
+(deftest retire-suite/nil-suite-is-noop
   (let ((stats (cupertino::make-xcbuild-stats)))
     (bump stats "SuiteA")
     (cupertino::xcbuild-retire-suite stats nil)
-    (is (= 1 (length (cupertino::xcbuild-stats-jobs stats))))))
+    (ok (= 1 (length (cupertino::xcbuild-stats-jobs stats))))))
 
-(test retire-suite/unknown-suite-is-noop
+(deftest retire-suite/unknown-suite-is-noop
   (let ((stats (cupertino::make-xcbuild-stats)))
     (bump stats "SuiteA")
     (cupertino::xcbuild-retire-suite stats "Nope")
-    (is (= 1 (length (cupertino::xcbuild-stats-jobs stats))))))
+    (ok (= 1 (length (cupertino::xcbuild-stats-jobs stats))))))
 
-(test retire-suite/leaves-non-test-jobs-alone
+(deftest retire-suite/leaves-non-test-jobs-alone
   ;; A build action that happens to share a label string with a finished suite
   ;; must not be evicted by suite retirement.
   (let* ((stats (cupertino::make-xcbuild-stats))
@@ -139,9 +135,9 @@
     (bump stats "SuiteA")
     (cupertino::xcbuild-retire-suite stats "SuiteA")
     (let ((jobs (cupertino::xcbuild-stats-jobs stats)))
-      (is (= 1 (length jobs)))
-      (is (null (cupertino::xcbuild-job-test (first jobs))))
-      (is (string= "compile" (cupertino::xcbuild-job-kind (first jobs)))))))
+      (ok (= 1 (length jobs)))
+      (ok (null (cupertino::xcbuild-job-test (first jobs))))
+      (ok (string= "compile" (cupertino::xcbuild-job-kind (first jobs)))))))
 
 ;;; -------------------------------------------------------------------------
 ;;; xcbuild-swb-text-event — SWB-mode gate for xcodebuild's text stream
@@ -152,54 +148,54 @@
 ;;; avoid double-counting.
 ;;; -------------------------------------------------------------------------
 
-(test swb-text-event/passes-test-case-passed
+(deftest swb-text-event/passes-test-case-passed
   (let ((ev (cupertino::xcbuild-swb-text-event
              "Test case 'SuiteA.testFoo()' passed (0.1 seconds)")))
-    (is (eq :test-case-passed (getf ev :type)))))
+    (ok (eq :test-case-passed (getf ev :type)))))
 
-(test swb-text-event/passes-test-case-failed
+(deftest swb-text-event/passes-test-case-failed
   (let ((ev (cupertino::xcbuild-swb-text-event
              "Test case 'SuiteA.testBar()' failed (0.5 seconds)")))
-    (is (eq :test-case-failed (getf ev :type)))))
+    (ok (eq :test-case-failed (getf ev :type)))))
 
-(test swb-text-event/passes-testing-start
+(deftest swb-text-event/passes-testing-start
   (let ((ev (cupertino::xcbuild-swb-text-event "Testing started")))
-    (is (eq :testing-start (getf ev :type)))))
+    (ok (eq :testing-start (getf ev :type)))))
 
-(test swb-text-event/passes-test-suite-summary
+(deftest swb-text-event/passes-test-suite-summary
   (let ((ev (cupertino::xcbuild-swb-text-event
              "Test Suite 'SuiteA' passed at 2026-06-18 09:59:37.000.")))
-    (is (eq :test-suite-summary (getf ev :type)))))
+    (ok (eq :test-suite-summary (getf ev :type)))))
 
-(test swb-text-event/passes-result-success
+(deftest swb-text-event/passes-result-success
   (let ((ev (cupertino::xcbuild-swb-text-event "** TEST SUCCEEDED **")))
-    (is (eq :result-success (getf ev :type)))))
+    (ok (eq :result-success (getf ev :type)))))
 
-(test swb-text-event/excludes-compile
+(deftest swb-text-event/excludes-compile
   ;; SWB protocol events already count compiles; the text copy must be ignored.
-  (is (null (cupertino::xcbuild-swb-text-event
+  (ok (null (cupertino::xcbuild-swb-text-event
              "CompileSwift normal arm64 /tmp/Foo.swift"))))
 
-(test swb-text-event/excludes-warning
-  (is (null (cupertino::xcbuild-swb-text-event
+(deftest swb-text-event/excludes-warning
+  (ok (null (cupertino::xcbuild-swb-text-event
              "/tmp/Foo.swift:1:1: warning: unused variable"))))
 
-(test swb-text-event/excludes-plain-line
-  (is (null (cupertino::xcbuild-swb-text-event "just some chatter"))))
+(deftest swb-text-event/excludes-plain-line
+  (ok (null (cupertino::xcbuild-swb-text-event "just some chatter"))))
 
-(test swb-text-event/test-line-updates-stats-build-line-does-not
+(deftest swb-text-event/test-line-updates-stats-build-line-does-not
   ;; Feeding a gated test line through xcbuild-handle-line bumps the test count
   ;; and adds a suite row; a build line is filtered out (no compiled bump).
   (let ((stats (cupertino::make-xcbuild-stats :action "test")))
-    (is (null (cupertino::xcbuild-swb-text-event
+    (ok (null (cupertino::xcbuild-swb-text-event
                "CompileSwift normal arm64 /tmp/Foo.swift")))
     (let ((ev (cupertino::xcbuild-swb-text-event
                "Test case 'SuiteA.testFoo()' passed (0.1 seconds)")))
       (cupertino::xcbuild-handle-line nil stats ev nil))
-    (is (= 1 (cupertino::xcbuild-stats-tests-passed stats)))
-    (is (= 0 (cupertino::xcbuild-stats-compiled stats)))
-    (is (= 1 (length (cupertino::xcbuild-stats-jobs stats))))
-    (is (cupertino::xcbuild-job-test (first (cupertino::xcbuild-stats-jobs stats))))))
+    (ok (= 1 (cupertino::xcbuild-stats-tests-passed stats)))
+    (ok (= 0 (cupertino::xcbuild-stats-compiled stats)))
+    (ok (= 1 (length (cupertino::xcbuild-stats-jobs stats))))
+    (ok (cupertino::xcbuild-job-test (first (cupertino::xcbuild-stats-jobs stats))))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Build vs test phase indicator + banner relabel
@@ -210,54 +206,54 @@
 ;;; as the final test verdict.
 ;;; -------------------------------------------------------------------------
 
-(test phase-label/nil-for-build-action
-  (is (null (cupertino::xcbuild-phase-label
+(deftest phase-label/nil-for-build-action
+  (ok (null (cupertino::xcbuild-phase-label
              (cupertino::make-xcbuild-stats :action "build")))))
 
-(test phase-label/building-then-testing-for-test-action
+(deftest phase-label/building-then-testing-for-test-action
   (let ((stats (cupertino::make-xcbuild-stats :action "test")))
-    (is (string= "Building" (cupertino::xcbuild-phase-label stats)))
+    (ok (string= "Building" (cupertino::xcbuild-phase-label stats)))
     (setf (cupertino::xcbuild-stats-phase stats) :test)
-    (is (string= "Testing" (cupertino::xcbuild-phase-label stats)))))
+    (ok (string= "Testing" (cupertino::xcbuild-phase-label stats)))))
 
-(test phase-label/counts-string-shows-phase-prefix
+(deftest phase-label/counts-string-shows-phase-prefix
   (let ((stats (cupertino::make-xcbuild-stats :action "test")))
-    (is (search "Building · Jobs:" (cupertino::xcbuild-counts-string stats)))
+    (ok (search "Building · Jobs:" (cupertino::xcbuild-counts-string stats)))
     (setf (cupertino::xcbuild-stats-phase stats) :test)
-    (is (search "Testing · Jobs:" (cupertino::xcbuild-counts-string stats)))))
+    (ok (search "Testing · Jobs:" (cupertino::xcbuild-counts-string stats)))))
 
-(test phase-label/counts-string-no-prefix-for-build
+(deftest phase-label/counts-string-no-prefix-for-build
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
-    (is (null (search " · " (cupertino::xcbuild-counts-string stats))))))
+    (ok (null (search " · " (cupertino::xcbuild-counts-string stats))))))
 
-(test banner/build-phase-test-succeeded-is-relabelled
+(deftest banner/build-phase-test-succeeded-is-relabelled
   (let ((stats (cupertino::make-xcbuild-stats :action "test")))
-    (is (string= "** BUILD FOR TESTING SUCCEEDED **"
+    (ok (string= "** BUILD FOR TESTING SUCCEEDED **"
                  (cupertino::xcbuild-result-banner-text stats "** TEST SUCCEEDED **")))
-    (is (string= "** BUILD FOR TESTING FAILED **"
+    (ok (string= "** BUILD FOR TESTING FAILED **"
                  (cupertino::xcbuild-result-banner-text stats "** TEST FAILED **")))))
 
-(test banner/test-phase-test-succeeded-passes-through
+(deftest banner/test-phase-test-succeeded-passes-through
   (let ((stats (cupertino::make-xcbuild-stats :action "test")))
     (setf (cupertino::xcbuild-stats-phase stats) :test)
-    (is (string= "** TEST SUCCEEDED **"
+    (ok (string= "** TEST SUCCEEDED **"
                  (cupertino::xcbuild-result-banner-text stats "** TEST SUCCEEDED **")))))
 
-(test banner/non-test-action-passes-through
+(deftest banner/non-test-action-passes-through
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
-    (is (string= "** BUILD SUCCEEDED **"
+    (ok (string= "** BUILD SUCCEEDED **"
                  (cupertino::xcbuild-result-banner-text stats "** BUILD SUCCEEDED **")))))
 
-(test phase/testing-start-flips-phase-to-test
+(deftest phase/testing-start-flips-phase-to-test
   ;; Driving a :testing-start line through the handler must flip phase :build ->
   ;; :test. A queue-only console (no output backend) keeps the emit side-effect
   ;; free of any terminal writes.
   (let ((stats (cupertino::make-xcbuild-stats :action "test"))
         (console (supercons:make-superconsole-with-output nil nil)))
-    (is (eq :build (cupertino::xcbuild-stats-phase stats)))
+    (ok (eq :build (cupertino::xcbuild-stats-phase stats)))
     (cupertino::xcbuild-handle-line
      console stats (cupertino::classify-xcodebuild-line "Testing started") nil)
-    (is (eq :test (cupertino::xcbuild-stats-phase stats)))))
+    (ok (eq :test (cupertino::xcbuild-stats-phase stats)))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Swift Package Manager resolution — classifier, extractors, live rows
@@ -270,51 +266,51 @@
   "Wrap NAME in U+2018/U+2019 curly quotes, as xcodebuild prints package names."
   (format nil "~Cpackage ~C~A~C" #\Space (code-char #x2018) name (code-char #x2019)))
 
-(test classify/package-resolve-start
-  (is (eq :package-resolve-start
+(deftest classify/package-resolve-start
+  (ok (eq :package-resolve-start
           (getf (cupertino::classify-xcodebuild-line "Resolve Package Graph") :type))))
 
-(test classify/package-fetch-variants
+(deftest classify/package-fetch-variants
   (dolist (line (list "Fetching from https://github.com/apple/swift-argument-parser.git"
                       "Cloning https://github.com/Comcast/mamba.git"
                       "Updating https://github.com/foo/Bar"
                       (format nil "Creating working copy of~A" (curly "mamba"))
                       (format nil "Checking out 1.8.2 of~A" (curly "swift-argument-parser"))))
-    (is (eq :package-fetch
+    (ok (eq :package-fetch
             (getf (cupertino::classify-xcodebuild-line line) :type)))))
 
-(test classify/package-resolved-both-cases
-  (is (eq :package-resolved
+(deftest classify/package-resolved-both-cases
+  (ok (eq :package-resolved
           (getf (cupertino::classify-xcodebuild-line "Resolved source packages:") :type)))
-  (is (eq :package-resolved
+  (ok (eq :package-resolved
           (getf (cupertino::classify-xcodebuild-line
                  "resolved source packages: swift-argument-parser, MiniProbe")
                 :type))))
 
-(test package-name/curly-quoted
-  (is (string= "swift-argument-parser"
+(deftest package-name/curly-quoted
+  (ok (string= "swift-argument-parser"
                (cupertino::xcbuild-package-name
                 (format nil "Checking out 1.8.2 of~A" (curly "swift-argument-parser"))))))
 
-(test package-name/straight-quoted
-  (is (string= "mamba"
+(deftest package-name/straight-quoted
+  (ok (string= "mamba"
                (cupertino::xcbuild-package-name
                 "Creating working copy of package 'mamba'"))))
 
-(test package-name/url-with-and-without-git
-  (is (string= "swift-argument-parser"
+(deftest package-name/url-with-and-without-git
+  (ok (string= "swift-argument-parser"
                (cupertino::xcbuild-package-name
                 "Fetching from https://github.com/apple/swift-argument-parser.git")))
-  (is (string= "Bar"
+  (ok (string= "Bar"
                (cupertino::xcbuild-package-name "Updating https://github.com/foo/Bar"))))
 
-(test package-kind/maps-leading-verb
-  (is (string= "fetch" (cupertino::xcbuild-package-kind "Fetching from https://x/y.git")))
-  (is (string= "clone" (cupertino::xcbuild-package-kind "Cloning https://x/y.git")))
-  (is (string= "update" (cupertino::xcbuild-package-kind "Updating https://x/y")))
-  (is (string= "checkout" (cupertino::xcbuild-package-kind "Checking out 1.0 of package 'y'"))))
+(deftest package-kind/maps-leading-verb
+  (ok (string= "fetch" (cupertino::xcbuild-package-kind "Fetching from https://x/y.git")))
+  (ok (string= "clone" (cupertino::xcbuild-package-kind "Cloning https://x/y.git")))
+  (ok (string= "update" (cupertino::xcbuild-package-kind "Updating https://x/y")))
+  (ok (string= "checkout" (cupertino::xcbuild-package-kind "Checking out 1.0 of package 'y'"))))
 
-(test package/fetch-lines-create-and-refresh-rows-then-retire
+(deftest package/fetch-lines-create-and-refresh-rows-then-retire
   ;; Two packages -> two resolve rows; a repeat activity line for one refreshes
   ;; (does not duplicate) its row; the completion summary retires all rows.
   (let ((stats (cupertino::make-xcbuild-stats :action "build"))
@@ -324,26 +320,26 @@
               console stats (cupertino::classify-xcodebuild-line line) nil)))
       (feed "Fetching from https://github.com/apple/swift-argument-parser.git")
       (feed "Cloning https://github.com/Comcast/mamba.git")
-      (is (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
-      (is (every #'cupertino::xcbuild-job-resolve (cupertino::xcbuild-stats-jobs stats)))
+      (ok (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
+      (ok (every #'cupertino::xcbuild-job-resolve (cupertino::xcbuild-stats-jobs stats)))
       ;; A second line for an existing package updates its row's kind in place.
       (feed (format nil "Checking out 1.8.2 of~A" (curly "swift-argument-parser")))
-      (is (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
+      (ok (= 2 (length (cupertino::xcbuild-stats-jobs stats))))
       (let ((row (find "swift-argument-parser" (cupertino::xcbuild-stats-jobs stats)
                        :key #'cupertino::xcbuild-job-label :test #'string=)))
-        (is (string= "checkout" (cupertino::xcbuild-job-kind row))))
+        (ok (string= "checkout" (cupertino::xcbuild-job-kind row))))
       ;; Completion retires every resolve row.
       (feed "Resolved source packages:")
-      (is (= 0 (length (cupertino::xcbuild-stats-jobs stats)))))))
+      (ok (= 0 (length (cupertino::xcbuild-stats-jobs stats)))))))
 
-(test swb-text-event/passes-package-resolution-lines
-  (is (eq :package-resolve-start
+(deftest swb-text-event/passes-package-resolution-lines
+  (ok (eq :package-resolve-start
           (getf (cupertino::xcbuild-swb-text-event "Resolve Package Graph") :type)))
-  (is (eq :package-fetch
+  (ok (eq :package-fetch
           (getf (cupertino::xcbuild-swb-text-event
                  "Fetching from https://github.com/apple/swift-argument-parser.git")
                 :type)))
-  (is (eq :package-resolved
+  (ok (eq :package-resolved
           (getf (cupertino::xcbuild-swb-text-event "Resolved source packages:") :type))))
 
 ;;; -------------------------------------------------------------------------
@@ -352,38 +348,38 @@
 
 (defun mpk-body (name) (messagepack:encode name))
 
-(test frame->event/known-name-yields-typed-event-without-trace
+(deftest frame->event/known-name-yields-typed-event-without-trace
   (let ((ev (swb:frame->event 1 (mpk-body "BUILD_TARGET_STARTED"))))
-    (is (eq :target-started (getf ev :type)))
-    (is (string= "BUILD_TARGET_STARTED" (getf ev :name)))))
+    (ok (eq :target-started (getf ev :type)))
+    (ok (string= "BUILD_TARGET_STARTED" (getf ev :name)))))
 
-(test frame->event/unknown-name-yields-nil-without-trace
-  (is (null (swb:frame->event 1 (mpk-body "SOMETHING_NEW_IN_XCODE_27")))))
+(deftest frame->event/unknown-name-yields-nil-without-trace
+  (ok (null (swb:frame->event 1 (mpk-body "SOMETHING_NEW_IN_XCODE_27")))))
 
-(test frame->event/unknown-name-yields-unknown-event-with-trace
+(deftest frame->event/unknown-name-yields-unknown-event-with-trace
   (let ((ev (swb:frame->event 7 (mpk-body "SOMETHING_NEW_IN_XCODE_27")
                               :trace-unknown t)))
-    (is (eq :unknown (getf ev :type)))
-    (is (string= "SOMETHING_NEW_IN_XCODE_27" (getf ev :name)))
-    (is (= 7 (getf ev :channel)))
-    (is (null (getf ev :args)))))
+    (ok (eq :unknown (getf ev :type)))
+    (ok (string= "SOMETHING_NEW_IN_XCODE_27" (getf ev :name)))
+    (ok (= 7 (getf ev :channel)))
+    (ok (null (getf ev :args)))))
 
-(test frame->event/known-name-still-typed-with-trace
+(deftest frame->event/known-name-still-typed-with-trace
   ;; trace-unknown only synthesizes for *unknown* names; known ones keep their
   ;; typed dispatch so the dashboard still consumes them.
   (let ((ev (swb:frame->event 1 (mpk-body "BUILD_TARGET_ENDED") :trace-unknown t)))
-    (is (eq :target-ended (getf ev :type)))))
+    (ok (eq :target-ended (getf ev :type)))))
 
-(test handle-event/target-started-and-ended-bump-counters
+(deftest handle-event/target-started-and-ended-bump-counters
   (let ((stats (cupertino::make-xcbuild-stats :action "build"))
         (console (supercons:make-superconsole-with-output nil nil)))
     (cupertino::xcbuild-handle-event console stats '(:type :target-started))
     (cupertino::xcbuild-handle-event console stats '(:type :target-started))
     (cupertino::xcbuild-handle-event console stats '(:type :target-ended))
-    (is (= 2 (cupertino::xcbuild-stats-targets-started stats)))
-    (is (= 1 (cupertino::xcbuild-stats-targets-ended stats)))))
+    (ok (= 2 (cupertino::xcbuild-stats-targets-started stats)))
+    (ok (= 1 (cupertino::xcbuild-stats-targets-ended stats)))))
 
-(test handle-event/build-started-is-noop-console-output-is-counted
+(deftest handle-event/build-started-is-noop-console-output-is-counted
   ;; :build-started is a true no-op; :console-output is counted (so the
   ;; trace digest can surface its frequency) but emits nothing.
   (let ((stats (cupertino::make-xcbuild-stats :action "build"))
@@ -393,47 +389,47 @@
                                      '(:type :console-output :args ("anything")))
     (cupertino::xcbuild-handle-event console stats
                                      '(:type :console-output :args ("more")))
-    (is (= 0 (cupertino::xcbuild-stats-finished stats)))
-    (is (= 0 (cupertino::xcbuild-stats-targets-started stats)))
-    (is (= 2 (cupertino::xcbuild-stats-console-outputs stats)))
+    (ok (= 0 (cupertino::xcbuild-stats-finished stats)))
+    (ok (= 0 (cupertino::xcbuild-stats-targets-started stats)))
+    (ok (= 2 (cupertino::xcbuild-stats-console-outputs stats)))
     ;; The unknown-msgs table is allocated lazily; neither of the handled
     ;; event types should trigger that allocation.
-    (is (null (cupertino::xcbuild-stats-unknown-msgs stats)))))
+    (ok (null (cupertino::xcbuild-stats-unknown-msgs stats)))))
 
-(test handle-event/unknown-event-dedups-and-counts
+(deftest handle-event/unknown-event-dedups-and-counts
   ;; First sighting records the name with count 1; subsequent sightings bump
   ;; the count without registering a new key. The hash-table is lazily
   ;; allocated on first unknown sighting.
   (let ((stats (cupertino::make-xcbuild-stats :action "build"))
         (console (supercons:make-superconsole-with-output nil nil)))
-    (is (null (cupertino::xcbuild-stats-unknown-msgs stats)))
+    (ok (null (cupertino::xcbuild-stats-unknown-msgs stats)))
     (dotimes (i 3)
       (cupertino::xcbuild-handle-event
        console stats '(:type :unknown :name "NEW_SERVICE_MSG" :channel 1)))
     (cupertino::xcbuild-handle-event
      console stats '(:type :unknown :name "ANOTHER_NEW_MSG" :channel 1))
     (let ((table (cupertino::xcbuild-stats-unknown-msgs stats)))
-      (is (hash-table-p table))
-      (is (= 2 (hash-table-count table)))
-      (is (= 3 (gethash "NEW_SERVICE_MSG" table)))
-      (is (= 1 (gethash "ANOTHER_NEW_MSG" table))))))
+      (ok (hash-table-p table))
+      (ok (= 2 (hash-table-count table)))
+      (ok (= 3 (gethash "NEW_SERVICE_MSG" table)))
+      (ok (= 1 (gethash "ANOTHER_NEW_MSG" table))))))
 
-(test counts-string/omits-targets-segment
+(deftest counts-string/omits-targets-segment
   ;; Target counts are deliberately surfaced in the final summary, not the
   ;; live counts string (BUILD_TARGET_STARTED arrives incrementally so the
   ;; denominator would grow over the run).
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
     (setf (cupertino::xcbuild-stats-targets-started stats) 4
           (cupertino::xcbuild-stats-targets-ended stats) 1)
-    (is (not (search "Targets" (cupertino::xcbuild-counts-string stats))))))
+    (ok (not (search "Targets" (cupertino::xcbuild-counts-string stats))))))
 
-(test final-summary/includes-targets-when-ended
+(deftest final-summary/includes-targets-when-ended
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
     (setf (cupertino::xcbuild-stats-targets-ended stats) 6)
-    (is (search "6 targets" (cupertino::xcbuild-final-summary stats)))))
+    (ok (search "6 targets" (cupertino::xcbuild-final-summary stats)))))
 
-(test final-summary/omits-targets-when-zero
-  (is (not (search "target"
+(deftest final-summary/omits-targets-when-zero
+  (ok (not (search "target"
                    (cupertino::xcbuild-final-summary
                     (cupertino::make-xcbuild-stats :action "build"))))))
 
@@ -441,24 +437,24 @@
 ;;; trace digest formatter (xcbuild-trace-digest-body + emit-trace-digest)
 ;;; -------------------------------------------------------------------------
 
-(test trace-digest-body/nil-when-empty
+(deftest trace-digest-body/nil-when-empty
   ;; No unknown entries, no console-output count -> nothing to digest.
-  (is (null (cupertino::xcbuild-trace-digest-body nil 0))))
+  (ok (null (cupertino::xcbuild-trace-digest-body nil 0))))
 
-(test trace-digest-body/entries-only
-  (is (string= "FOO ×3, BAR ×1"
+(deftest trace-digest-body/entries-only
+  (ok (string= "FOO ×3, BAR ×1"
                (cupertino::xcbuild-trace-digest-body
                 '(("FOO" . 3) ("BAR" . 1)) 0))))
 
-(test trace-digest-body/console-only
-  (is (string= "console-output ×7"
+(deftest trace-digest-body/console-only
+  (ok (string= "console-output ×7"
                (cupertino::xcbuild-trace-digest-body nil 7))))
 
-(test trace-digest-body/entries-and-console-appended
-  (is (string= "FOO ×2, console-output ×5"
+(deftest trace-digest-body/entries-and-console-appended
+  (ok (string= "FOO ×2, console-output ×5"
                (cupertino::xcbuild-trace-digest-body '(("FOO" . 2)) 5))))
 
-(test trace-digest-body/caps-at-top-n
+(deftest trace-digest-body/caps-at-top-n
   ;; CAP entries fit verbatim; one more triggers the overflow tail. The body
   ;; function preserves caller order (sorting is the caller's job); we feed
   ;; sorted entries so the cap drops the lowest-count tail.
@@ -466,11 +462,11 @@
          (entries (loop for i from (1+ cap) downto 1
                         collect (cons (format nil "M~D" i) i)))
          (body (cupertino::xcbuild-trace-digest-body entries 0)))
-    (is (search "(and 1 more)" body))
+    (ok (search "(and 1 more)" body))
     ;; The lowest-count entry (M1) is the one elided.
-    (is (not (search "M1 ×1" body)))))
+    (ok (not (search "M1 ×1" body)))))
 
-(test emit-trace-digest/noop-when-console-nil
+(deftest emit-trace-digest/noop-when-console-nil
   ;; CONSOLE=NIL means the run is non-interactive; emit must be silent and
   ;; non-erroring even when both data buckets are full.
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
@@ -483,7 +479,7 @@
 ;;; SWB env prefix: every interpolated value must flow through shell-quote
 ;;; -------------------------------------------------------------------------
 
-(test swb-env-prefix/quotes-all-paths
+(deftest swb-env-prefix/quotes-all-paths
   ;; A path with an apostrophe is the canonical hostile case; the helper
   ;; must escape it via '\'' so the resulting POSIX command is well-formed.
   (let* ((config (cupertino::make-swb-runner-config
@@ -492,55 +488,55 @@
                   :trace nil))
          (events "/tmp/foo'bar.events")
          (prefix (cupertino::swb-env-prefix config events)))
-    (is (search "'\\''" prefix))
+    (ok (search "'\\''" prefix))
     ;; All three single-quoted values appear, each carrying their escape.
-    (is (search "/opt/O'\\''Brien/SWBBuildService" prefix))
-    (is (search "/opt/cup'\\''tino/bin/cupertino" prefix))
-    (is (search "/tmp/foo'\\''bar.events" prefix))
+    (ok (search "/opt/O'\\''Brien/SWBBuildService" prefix))
+    (ok (search "/opt/cup'\\''tino/bin/cupertino" prefix))
+    (ok (search "/tmp/foo'\\''bar.events" prefix))
     ;; No trace flag in this config -> CUPERTINO_SWB_TRACE absent.
-    (is (not (search "CUPERTINO_SWB_TRACE" prefix)))))
+    (ok (not (search "CUPERTINO_SWB_TRACE" prefix)))))
 
-(test swb-env-prefix/trace-flag-when-on
+(deftest swb-env-prefix/trace-flag-when-on
   (let* ((config (cupertino::make-swb-runner-config
                   :real-service "/a" :self-exe "/b" :trace t))
          (prefix (cupertino::swb-env-prefix config "/c")))
-    (is (search "CUPERTINO_SWB_TRACE=1" prefix))))
+    (ok (search "CUPERTINO_SWB_TRACE=1" prefix))))
 
-(test pty-wrap-command/prepends-script-q-devnull
+(deftest pty-wrap-command/prepends-script-q-devnull
   ;; The wrapper must put script(1) in front of the command so xcodebuild's
   ;; stdout sees a pty and line-buffers; -q suppresses the startup banner and
   ;; /dev/null discards the typescript (our drain reads from the process's
   ;; own stdout, which script forwards from the pty).
   (let ((wrapped (cupertino::pty-wrap-command "env A=B xcodebuild -scheme 'Foo'")))
-    (is (string= "script -q /dev/null env A=B xcodebuild -scheme 'Foo'" wrapped))
+    (ok (string= "script -q /dev/null env A=B xcodebuild -scheme 'Foo'" wrapped))
     ;; Idempotency isn't a contract -- but the wrapper must not mutate the
     ;; tail in any way the caller didn't ask for, so the input substring
     ;; survives intact at the end of the wrapped string.
-    (is (search "env A=B xcodebuild -scheme 'Foo'" wrapped))))
+    (ok (search "env A=B xcodebuild -scheme 'Foo'" wrapped))))
 
 ;;; -------------------------------------------------------------------------
 ;;; Per-cell trace-file resolution
 ;;; -------------------------------------------------------------------------
 
-(test swb-resolve-events-file/no-trace-file-yields-tempfile
+(deftest swb-resolve-events-file/no-trace-file-yields-tempfile
   (let ((config (cupertino::make-swb-runner-config
                  :real-service "/x" :self-exe "/y" :trace nil :trace-file nil)))
     (multiple-value-bind (path persistent-p)
         (cupertino::swb-resolve-events-file config "MyScheme-iPhone16")
-      (is (null persistent-p))
-      (is (pathnamep path)))))
+      (ok (null persistent-p))
+      (ok (pathnamep path)))))
 
-(test swb-resolve-events-file/single-cell-uses-base-path
+(deftest swb-resolve-events-file/single-cell-uses-base-path
   (let ((config (cupertino::make-swb-runner-config
                  :real-service "/x" :self-exe "/y" :trace t
                  :trace-file "/tmp/build.txt")))
     (multiple-value-bind (path persistent-p)
         (cupertino::swb-resolve-events-file config nil)
-      (is (not (null persistent-p)))
-      (is (equal (namestring (pathname "/tmp/build.txt"))
+      (ok (not (null persistent-p)))
+      (ok (equal (namestring (pathname "/tmp/build.txt"))
                  (namestring path))))))
 
-(test swb-resolve-events-file/parallel-suffixes-per-cell
+(deftest swb-resolve-events-file/parallel-suffixes-per-cell
   ;; --swb-trace-file /tmp/build.txt with cell label "MyScheme iPhone:16"
   ;; -> /tmp/build-MyScheme-iPhone-16.txt (label sanitized).
   (let ((config (cupertino::make-swb-runner-config
@@ -548,13 +544,13 @@
                  :trace-file "/tmp/build.txt")))
     (multiple-value-bind (path persistent-p)
         (cupertino::swb-resolve-events-file config "MyScheme iPhone:16")
-      (is (not (null persistent-p)))
+      (ok (not (null persistent-p)))
       (let ((name (pathname-name path)))
-        (is (search "build-" name))
+        (ok (search "build-" name))
         ;; Spaces and colons sanitized out of the cell label.
-        (is (null (search " " name)))
-        (is (null (search ":" name)))
-        (is (equal "txt" (pathname-type path)))))))
+        (ok (null (search " " name)))
+        (ok (null (search ":" name)))
+        (ok (equal "txt" (pathname-type path)))))))
 
 
 ;;; -------------------------------------------------------------------------
@@ -590,25 +586,25 @@
           (gethash "path" loc) path-cell)
     loc))
 
-(test swb-diag-location/unknown-yields-nils
+(deftest swb-diag-location/unknown-yields-nils
   (let ((h (%swb-diag-hash :kind 1 :message "x"
                            :location (let ((u (make-hash-table :test 'equal)))
                                        (setf (gethash "unknown" u)
                                              (make-hash-table :test 'equal))
                                        u))))
     (multiple-value-bind (p l c) (cupertino::swb-diag-location h)
-      (is (null p)) (is (null l)) (is (null c)))))
+      (ok (null p)) (ok (null l)) (ok (null c)))))
 
-(test swb-diag-location/path-with-line-and-column
+(deftest swb-diag-location/path-with-line-and-column
   (let ((h (%swb-diag-hash
             :kind 1 :message "unused"
             :location (%swb-loc-path-textual "/tmp/Foo.swift" 42 10))))
     (multiple-value-bind (p l c) (cupertino::swb-diag-location h)
-      (is (string= "/tmp/Foo.swift" p))
-      (is (eql 42 l))
-      (is (eql 10 c)))))
+      (ok (string= "/tmp/Foo.swift" p))
+      (ok (eql 42 l))
+      (ok (eql 10 c)))))
 
-(test swb-diag-location/path-without-file-location
+(deftest swb-diag-location/path-without-file-location
   ;; fileLocation absent → path only.
   (let* ((path-cell (make-hash-table :test 'equal))
          (loc (make-hash-table :test 'equal)))
@@ -617,23 +613,23 @@
     (multiple-value-bind (p l c)
         (cupertino::swb-diag-location (%swb-diag-hash :kind 1 :message "m"
                                                       :location loc))
-      (is (string= "/tmp/Foo.swift" p))
-      (is (null l))
-      (is (null c)))))
+      (ok (string= "/tmp/Foo.swift" p))
+      (ok (null l))
+      (ok (null c)))))
 
-(test swb-diag-location-prefix/nil-path-yields-nil
-  (is (null (cupertino::swb-diag-location-prefix nil nil nil))))
+(deftest swb-diag-location-prefix/nil-path-yields-nil
+  (ok (null (cupertino::swb-diag-location-prefix nil nil nil))))
 
-(test swb-diag-location-prefix/path-line-column
-  (is (string= "/tmp/Foo.swift:42:10: "
+(deftest swb-diag-location-prefix/path-line-column
+  (ok (string= "/tmp/Foo.swift:42:10: "
                (cupertino::swb-diag-location-prefix "/tmp/Foo.swift" 42 10))))
 
-(test swb-diag-location-prefix/path-line-only
-  (is (string= "/tmp/Foo.swift:42: "
+(deftest swb-diag-location-prefix/path-line-only
+  (ok (string= "/tmp/Foo.swift:42: "
                (cupertino::swb-diag-location-prefix "/tmp/Foo.swift" 42 nil))))
 
-(test swb-diag-location-prefix/path-only
-  (is (string= "/tmp/Foo.swift: "
+(deftest swb-diag-location-prefix/path-only
+  (ok (string= "/tmp/Foo.swift: "
                (cupertino::swb-diag-location-prefix "/tmp/Foo.swift" nil nil))))
 
 (defun %swb-diag-arg (hash)
@@ -642,14 +638,14 @@ swb-arg-json can decode it (it expects a non-string byte vector)."
   (let ((json (with-output-to-string (out) (yason:encode hash out))))
     (map '(simple-array (unsigned-byte 8) (*)) #'char-code json)))
 
-(test xcbuild-swb-diagnostic/warning-without-location-counts-but-no-prefix
+(deftest xcbuild-swb-diagnostic/warning-without-location-counts-but-no-prefix
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
     (cupertino::xcbuild-swb-diagnostic
      nil stats
      (%swb-diag-arg (%swb-diag-hash :kind 1 :message "unused variable")))
-    (is (= 1 (cupertino::xcbuild-stats-warnings stats)))))
+    (ok (= 1 (cupertino::xcbuild-stats-warnings stats)))))
 
-(test xcbuild-swb-diagnostic/error-with-location-bumps-count
+(deftest xcbuild-swb-diagnostic/error-with-location-bumps-count
   ;; End-to-end through swb-arg-json + swb-diag-location; the visible side
   ;; effect we can assert without a console is the error counter.
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
@@ -658,9 +654,9 @@ swb-arg-json can decode it (it expects a non-string byte vector)."
      (%swb-diag-arg
       (%swb-diag-hash :kind 2 :message "type mismatch"
                       :location (%swb-loc-path-textual "/p/F.swift" 7 3))))
-    (is (= 1 (cupertino::xcbuild-stats-errors stats)))))
+    (ok (= 1 (cupertino::xcbuild-stats-errors stats)))))
 
-(test xcbuild-swb-diagnostic/same-message-different-locations-not-deduped
+(deftest xcbuild-swb-diagnostic/same-message-different-locations-not-deduped
   ;; Two warnings with the same text but different line numbers must count
   ;; as two — the dedup key now includes the location prefix.
   (let ((stats (cupertino::make-xcbuild-stats :action "build")))
@@ -674,7 +670,7 @@ swb-arg-json can decode it (it expects a non-string byte vector)."
      (%swb-diag-arg
       (%swb-diag-hash :kind 1 :message "unused"
                       :location (%swb-loc-path-textual "/p/F.swift" 9 1))))
-    (is (= 2 (cupertino::xcbuild-stats-warnings stats)))))
+    (ok (= 2 (cupertino::xcbuild-stats-warnings stats)))))
 
 
 ;;; -------------------------------------------------------------------------
@@ -687,37 +683,37 @@ swb-arg-json can decode it (it expects a non-string byte vector)."
 ;;; single-cell SWB, and the parallel matrix runner.
 ;;; -------------------------------------------------------------------------
 
-(test combined-banner-text/build-succeeded
-  (is (string= "** BUILD SUCCEEDED **"
+(deftest combined-banner-text/build-succeeded
+  (ok (string= "** BUILD SUCCEEDED **"
                (cupertino::xcbuild-combined-banner-text "build" t))))
 
-(test combined-banner-text/build-failed
-  (is (string= "** BUILD FAILED **"
+(deftest combined-banner-text/build-failed
+  (ok (string= "** BUILD FAILED **"
                (cupertino::xcbuild-combined-banner-text "build" nil))))
 
-(test combined-banner-text/uppercases-action
+(deftest combined-banner-text/uppercases-action
   ;; xcodebuild's banner verb is always uppercased; mirror that for `test',
   ;; `clean', and `archive' actions.
-  (is (string= "** TEST SUCCEEDED **"
+  (ok (string= "** TEST SUCCEEDED **"
                (cupertino::xcbuild-combined-banner-text "test" t)))
-  (is (string= "** CLEAN FAILED **"
+  (ok (string= "** CLEAN FAILED **"
                (cupertino::xcbuild-combined-banner-text "clean" nil)))
-  (is (string= "** ARCHIVE SUCCEEDED **"
+  (ok (string= "** ARCHIVE SUCCEEDED **"
                (cupertino::xcbuild-combined-banner-text "archive" t))))
 
-(test print-build-banner/success-line
+(deftest print-build-banner/success-line
   ;; Bold-green banner with the standard '** BUILD SUCCEEDED **' verdict.
   ;; Asserts both the verdict text and the bold+green ANSI envelope so a
   ;; regression in either is caught.
   (let ((out (with-output-to-string (s)
                (cupertino::print-build-banner "build" t s))))
-    (is (search "** BUILD SUCCEEDED **" out))
-    (is (search (format nil "~C[1;32m" #\Escape) out))
-    (is (search (format nil "~C[0m" #\Escape) out))))
+    (ok (search "** BUILD SUCCEEDED **" out))
+    (ok (search (format nil "~C[1;32m" #\Escape) out))
+    (ok (search (format nil "~C[0m" #\Escape) out))))
 
-(test print-build-banner/failure-line
+(deftest print-build-banner/failure-line
   ;; Bold-red banner for the failure branch.
   (let ((out (with-output-to-string (s)
                (cupertino::print-build-banner "test" nil s))))
-    (is (search "** TEST FAILED **" out))
-    (is (search (format nil "~C[1;31m" #\Escape) out))))
+    (ok (search "** TEST FAILED **" out))
+    (ok (search (format nil "~C[1;31m" #\Escape) out))))

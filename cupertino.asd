@@ -43,17 +43,13 @@
 
 (asdf:defsystem #:cupertino/tests
   :description "Unit tests for cupertino"
-  :depends-on (#:cupertino #:fiveam)
+  :depends-on (#:cupertino #:rove)
   :pathname "tests"
   :serial t
   :components ((:file "package")
                (:file "cell-tests")
                (:file "xcbuild-pretty-tests"))
   :perform (asdf:test-op (o c)
-             (uiop:symbol-call '#:fiveam '#:run!
-                               (uiop:find-symbol* '#:cupertino-cells
-                                                  '#:cupertino/tests))
-             (uiop:symbol-call '#:fiveam '#:run!
-                               (uiop:find-symbol* '#:cupertino-xcbuild-pretty
-                                                  '#:cupertino/tests))))
+             (unless (uiop:symbol-call '#:rove '#:run-suite :cupertino/tests)
+               (error "Tests failed"))))
 
