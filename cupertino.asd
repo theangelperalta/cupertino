@@ -6,7 +6,7 @@
 (asdf:defsystem #:cupertino
   :description "CLI tool for Apple 🍎 platform development workflows"
   :version "0.1.0"
-  :author "Angel Perlata <acort3255@gmail.com>"
+  :author "Angel Peralta <acort3255@gmail.com>"
   :license  "MIT"
   :pathname "src"
   :serial t
