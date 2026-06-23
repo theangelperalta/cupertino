@@ -1,0 +1,8 @@
+("quicklisp" .
+ (:class qlot/source/dist:source-dist
+  :initargs (:distribution "https://beta.quicklisp.org/dist/quicklisp.txt" :%version :latest)
+  :version "2026-01-01"))
+("supercons" .
+ (:class qlot/source/git:source-git
+  :initargs (:remote-url "https://github.com/theangelperalta/supercons.git")
+  :version "git-bdca958c9926b42b38e490993d3dd3416fe37330"))
