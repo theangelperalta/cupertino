@@ -100,6 +100,38 @@ stream alongside stdout and NSLog, matching Xcode's debug console."
                    (format nil "DEVICECTL_CHILD_~A xcrun devicectl device process launch --console --terminate-existing --device '~A' '~A'"
                            +activity-dt-mode-env+ device-id bundle-id)))
 
+(defun apply-install-pick (cmd model)
+  "Run the unified destination picker for `cupertino install --pick' and apply
+the result to MODEL in-memory so the build and install steps both target the
+chosen UDID. Errors out when stdin isn't a TTY or no targets are available.
+With --save, persists the choice to .cupertino/cupertino.lisp and clears the
+opposite slot so the destination stays sticky like Xcode's run-destination."
+  (unless (stdin-interactive-p)
+    (cup-error "`cupertino install --pick' needs an interactive terminal (stdin is not a TTY).")
+    (uiop:quit 1))
+  (let* ((cfg-path (first (clingon:command-arguments cmd)))
+         (current  (or (model-device model) (model-sim model)))
+         (picked   (pick-install-destination :current-udid current)))
+    (cond
+      ((null picked)
+       (cup-error "No install destinations available. Try `cupertino info sim' or `cupertino info device'.")
+       (uiop:quit 1))
+      (t
+       (format *error-output* "~A: ~A~%"
+               (colored-text "Picked" :cyan) (getf picked :udid))
+       (ecase (getf picked :kind)
+         (:sim    (setf (model-sim model)    (getf picked :udid)
+                        (model-device model) nil))
+         (:device (setf (model-device model) (getf picked :udid)
+                        (model-sim model)    nil)))
+       (when (clingon:getopt cmd :save)
+         (let ((updates (ecase (getf picked :kind)
+                          (:sim    (list :sim (getf picked :udid) :device nil))
+                          (:device (list :device (getf picked :udid) :sim nil)))))
+           (model:update-model-config cfg-path updates)
+           (format *error-output* "~A ~S~%"
+                   (colored-text "saved" :green) updates)))))))
+
 (defun install/handler (cmd)
   "Handler for the `install' command.
 Builds the project then installs the .app to the target simulator or device."
@@ -107,11 +139,16 @@ Builds the project then installs the .app to the target simulator or device."
          (model (model:make-cupertino-model path))
          (scheme (or (clingon:getopt cmd :scheme)
                      (model-scheme model)))
-         (configuration (clingon:getopt cmd :configuration))
-         (device-id (resolve-device-destination cmd model))
-         (sim-udid (unless device-id (resolve-sim-udid cmd model)))
-         (project-flag (resolve-project-flag cmd model))
-         (sdk (if device-id "iphoneos" "iphonesimulator")))
+         (configuration (clingon:getopt cmd :configuration)))
+    ;; --pick runs an Xcode-style unified picker first so the chosen UDID
+    ;; flows through both `run-xcodebuild' (via the mutated model) and the
+    ;; install/launch steps below.
+    (when (clingon:getopt cmd :pick)
+      (apply-install-pick cmd model))
+    (let* ((device-id (resolve-device-destination cmd model))
+           (sim-udid (unless device-id (resolve-sim-udid cmd model)))
+           (project-flag (resolve-project-flag cmd model))
+           (sdk (if device-id "iphoneos" "iphonesimulator")))
     ;; Build using run-xcodebuild from xcode-tools
     (run-xcodebuild cmd "build")
     ;; Use -showBuildSettings to find app path and bundle ID
@@ -133,7 +170,7 @@ Builds the project then installs the .app to the target simulator or device."
           (progn (install-to-device device-id app-path)
                  (launch-on-device device-id bundle-id))
           (progn (install-to-simulator sim-udid app-path)
-                 (launch-on-simulator sim-udid bundle-id))))))
+                 (launch-on-simulator sim-udid bundle-id)))))))
 
 (defun install/command ()
   "A command to build and install the app to a simulator or device."
@@ -145,4 +182,15 @@ Builds the project then installs the .app to the target simulator or device."
 
 (defun install/options ()
   "Returns the options for the `install' command."
-  (xcodebuild-options "build and install"))
+  (append (xcodebuild-options "build and install")
+          (list
+           (clingon:make-option
+            :flag
+            :description "interactively pick a simulator or device destination (Xcode-style)"
+            :long-name "pick"
+            :key :pick)
+           (clingon:make-option
+            :flag
+            :description "with --pick, save the chosen destination to .cupertino/cupertino.lisp"
+            :long-name "save"
+            :key :save))))

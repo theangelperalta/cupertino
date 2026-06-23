@@ -52,6 +52,87 @@
       (sc:draw-vertical-draw b panel mode))
     (sc:draw-vertical-finish b)))
 
+;;; ---------------------------------------------------------------------------
+;;; Worker-pool runner over the scheme x destination matrix.
+;;; ---------------------------------------------------------------------------
+
+(defun make-xcbuild-cell-state (cell action)
+  "Construct the per-cell mutable state plist for one matrix invocation.
+:LABEL/:CMD come from CELL; :STATS is freshly allocated so cells don't share
+counters; :PROC/:EXIT are populated as the cell runs."
+  (list :label (getf cell :label) :cmd (getf cell :cmd)
+        :stats (make-xcbuild-stats :action action)
+        :proc nil :exit nil))
+
+(defun make-xcbuild-cells-dashboard (states)
+  "Build the composite dashboard root that stacks one panel per cell, in the
+order STATES were created (== the order CELLS were supplied)."
+  (let ((panels (mapcar (lambda (s) (make-instance 'xcbuild-cell-panel
+                                                   :label (getf s :label)
+                                                   :stats (getf s :stats)))
+                        states)))
+    (make-instance 'xcbuild-multi-progress :panels panels)))
+
+(defun run-xcodebuild/parallel-raw-fallback (states)
+  "Non-TTY fallback: run STATES sequentially with raw interactive I/O. SWB
+needs the dashboard so this path implies the text pipeline. Returns the
+worst exit code across all cells (0 only if every cell succeeded)."
+  (reduce #'max (mapcar (lambda (s) (run-xcodebuild/raw (getf s :cmd))) states)
+          :initial-value 0))
+
+(defun xcbuild-parallel-render-loop (console root lock done?)
+  "Render-thread body: tick the dashboard at *XCBUILD-RENDER-INTERVAL* until
+DONE? (a thunk) returns true, taking LOCK around each render so per-cell
+worker mutations don't tear the frame."
+  (loop until (funcall done?)
+        do (sleep *xcbuild-render-interval*)
+           (unless (funcall done?)
+             (bt:with-lock-held (lock)
+               (sc:superconsole-render console root)))))
+
+(defun xcbuild-swb-spawn-text-drain (out console stats root lock)
+  "Spawn the thread that drains xcodebuild's stdout under SWB mode. The build
+graph is event-driven, but the test-execution and SPM-resolution phases emit
+no SWB events, so lines matching *XCBUILD-SWB-TEXT-TYPES* are fed through the
+text classifier; everything else is discarded so the pipe never blocks."
+  (bt:make-thread
+   (lambda ()
+     (loop for l = (read-line out nil :eof) until (eq l :eof)
+           do (let ((ev (xcbuild-swb-text-event l)))
+                (when ev
+                  (bt:with-lock-held (lock)
+                    (xcbuild-handle-line console stats ev nil)
+                    (sc:superconsole-render console root))))))
+   :name "xcbuild-drain"))
+
+(defun xcbuild-swb-spawn-event-consumer (events-file done? console stats root lock)
+  "Spawn the thread that tails EVENTS-FILE and applies each decoded SWB event
+to STATS under LOCK, rendering after each one. Stops when DONE? returns true."
+  (bt:make-thread
+   (lambda ()
+     (swb-consume-events
+      events-file done?
+      (lambda (event)
+        (bt:with-lock-held (lock)
+          (xcbuild-handle-event console stats event)
+          (sc:superconsole-render console root)))))
+   :name "xcbuild-events"))
+
+(defun xcbuild-parallel-emit-trace-digests (console swb states)
+  "End-of-run SWB trace digest. Emitting per-cell + combined here (after all
+workers joined, before finalize) keeps the lines contiguous and clearly
+post-build; emitting per-cell as cells finished interleaved the digest with
+still-running cells' progress. Gated on the trace flag -- BUILD_CONSOLE_OUTPUT
+counters accrue on every SWB build, so without this gate the digest fired
+even when --swb-trace was absent."
+  (when (and swb (swb-runner-config-trace swb))
+    (dolist (st states)
+      (let ((*xcbuild-emit-prefix* (getf st :label)))
+        (xcbuild-emit-trace-digest console (getf st :stats)
+                                   :trace-file (getf st :events-file))))
+    (xcbuild-emit-trace-combined console
+                                 (mapcar (lambda (s) (getf s :stats)) states))))
+
 ;;; Worker-pool runner over the scheme x destination matrix. CELLS is a list of
 ;;; plists (:label :cmd), each one xcodebuild invocation. When SWB is a non-NIL
 ;;; SWB-RUNNER-CONFIG, each cell runs its own SWB pipeline; otherwise cells
@@ -61,27 +142,17 @@
   "Run CELLS concurrently (<= JOBS at once) under one combined dashboard.
 Return 0 if all cells succeed, else 1."
   (let* ((console (sc:make-superconsole))
-         (states (mapcar (lambda (c)
-                           (list :label (getf c :label) :cmd (getf c :cmd)
-                                 :stats (make-xcbuild-stats :action action)
-                                 :proc nil :exit nil))
-                         cells))
-         (panels (mapcar (lambda (s) (make-instance 'xcbuild-cell-panel
-                                                    :label (getf s :label)
-                                                    :stats (getf s :stats)))
-                         states))
-         (root (make-instance 'xcbuild-multi-progress :panels panels))
+         (states (mapcar (lambda (c) (make-xcbuild-cell-state c action)) cells))
+         (root (make-xcbuild-cells-dashboard states))
          (lock (bt:make-lock "xcbuild-parallel"))   ; serializes stats + render + state
-         (qlock (bt:make-lock "xcbuild-queue"))      ; guards queue + aborted
+         (qlock (bt:make-lock "xcbuild-queue"))     ; guards queue + aborted
          (queue (copy-list states))
          (aborted nil)
          (done nil)
          (render-thread nil))
     (unless console
-      ;; Non-TTY fallback: run sequentially with raw I/O (SWB needs the dashboard).
       (return-from run-xcodebuild/parallel
-        (reduce #'max (mapcar (lambda (s) (run-xcodebuild/raw (getf s :cmd))) states)
-                :initial-value 0)))
+        (run-xcodebuild/parallel-raw-fallback states)))
     (labels ((next-state ()
                (bt:with-lock-held (qlock) (unless aborted (pop queue))))
              (note-failure ()
@@ -91,6 +162,8 @@ Return 0 if all cells succeed, else 1."
                    (bt:with-lock-held (lock)
                      (setf procs (remove nil (mapcar (lambda (s) (getf s :proc)) states))))
                    (dolist (p procs) (ignore-errors (uiop:terminate-process p))))))
+             (record-proc (st proc)
+               (bt:with-lock-held (lock) (setf (getf st :proc) proc)))
              (finish-state (st code)
                (bt:with-lock-held (lock)
                  (setf (getf st :exit) code)
@@ -103,7 +176,7 @@ Return 0 if all cells succeed, else 1."
                       (stream (uiop:process-info-output proc))
                       (stats (getf st :stats))
                       (in-diag nil))
-                 (bt:with-lock-held (lock) (setf (getf st :proc) proc))
+                 (record-proc st proc)
                  (loop for line = (read-line stream nil :eof) until (eq line :eof)
                        do (bt:with-lock-held (lock)
                             (let ((*xcbuild-emit-prefix* (getf st :label)))
@@ -115,60 +188,44 @@ Return 0 if all cells succeed, else 1."
                  (finish-state st (uiop:wait-process proc))))
              (run-one/swb (st)
                ;; Mirror run-xcodebuild/swb, but per cell, into the shared console.
-               ;; SWB-RESOLVE-EVENTS-FILE gives each cell a tempfile by default, or
-               ;; a per-cell-suffixed path under the user's --swb-trace-file base.
+               ;; SWB-RESOLVE-EVENTS-FILE gives each cell a tempfile by default,
+               ;; or a per-cell-suffixed path under the user's --swb-trace-file
+               ;; base; persistent paths are stashed on the state so the
+               ;; post-run digest can reference them.
                (multiple-value-bind (events persistent-p)
                    (swb-resolve-events-file swb (getf st :label))
                  (setf (getf st :events-file) (when persistent-p events))
-               (let* ((env-cmd (pty-wrap-command
-                                (concatenate 'string
-                                             (swb-env-prefix swb events)
-                                             (getf st :cmd))))
-                      (proc (uiop:launch-program env-cmd
-                                                 :output :stream :error-output :output))
-                      (out (uiop:process-info-output proc))
-                      (stats (getf st :stats))
-                      (ev-done nil) (drain nil) (ev nil))
-                 (bt:with-lock-held (lock) (setf (getf st :proc) proc))
-                 (ignore-errors (close (open events :direction :output
-                                             :if-does-not-exist :create :if-exists :append)))
-                 ;; Build graph is event-driven; the test-execution and
-                 ;; SPM-resolution phases emit no SWB events, so feed their text
-                 ;; lines (*xcbuild-swb-text-types*) to the dashboard and discard
-                 ;; the rest.
-                 (setf drain (bt:make-thread
-                              (lambda ()
-                                (loop for l = (read-line out nil :eof)
-                                      until (eq l :eof)
-                                      do (let ((ev (xcbuild-swb-text-event l)))
-                                           (when ev
-                                             (bt:with-lock-held (lock)
-                                               (xcbuild-handle-line console stats ev nil)
-                                               (sc:superconsole-render console root))))))
-                              :name "xcbuild-drain"))
-                 (setf ev (bt:make-thread
-                           (lambda ()
-                             (swb-consume-events
-                              events (lambda () ev-done)
-                              (lambda (event)
-                                (bt:with-lock-held (lock)
-                                  (xcbuild-handle-event console stats event)
-                                  (sc:superconsole-render console root)))))
-                           :name "xcbuild-events"))
-                 (let ((code (uiop:wait-process proc)))
-                   (setf ev-done t)
-                   (ignore-errors (bt:join-thread drain))
-                   (ignore-errors (bt:join-thread ev))
-                   (unless persistent-p (ignore-errors (delete-file events)))
-                   (finish-state st code)))))
+                 (let* ((env-cmd (pty-wrap-command
+                                  (concatenate 'string
+                                               (swb-env-prefix swb events)
+                                               (getf st :cmd))))
+                        (proc (uiop:launch-program env-cmd
+                                                   :output :stream
+                                                   :error-output :output))
+                        (out (uiop:process-info-output proc))
+                        (stats (getf st :stats))
+                        (ev-done nil))
+                   (record-proc st proc)
+                   ;; Create the file up front so the reader can open it before
+                   ;; the proxy does.
+                   (ignore-errors (close (open events :direction :output
+                                                      :if-does-not-exist :create
+                                                      :if-exists :append)))
+                   (let ((drain (xcbuild-swb-spawn-text-drain
+                                 out console stats root lock))
+                         (ev (xcbuild-swb-spawn-event-consumer
+                              events (lambda () ev-done) console stats root lock))
+                         (code (uiop:wait-process proc)))
+                     (setf ev-done t)
+                     (ignore-errors (bt:join-thread drain))
+                     (ignore-errors (bt:join-thread ev))
+                     (unless persistent-p (ignore-errors (delete-file events)))
+                     (finish-state st code)))))
              (run-one (st) (if swb (run-one/swb st) (run-one/pretty st))))
       (setf render-thread
             (bt:make-thread
-             (lambda () (loop until done
-                              do (sleep *xcbuild-render-interval*)
-                                 (unless done
-                                   (bt:with-lock-held (lock)
-                                     (sc:superconsole-render console root)))))
+             (lambda () (xcbuild-parallel-render-loop
+                         console root lock (lambda () done)))
              :name "xcbuild-parallel-render"))
       (unwind-protect
            (let ((workers
@@ -183,19 +240,7 @@ Return 0 if all cells succeed, else 1."
                      states :initial-value 0))
         (setf done t)
         (when render-thread (ignore-errors (bt:join-thread render-thread)))
-        ;; End-of-run SWB trace digest. Emitting per-cell + combined here (after
-        ;; all workers joined, before finalize) keeps the lines contiguous and
-        ;; clearly post-build; emitting per-cell as cells finished interleaved
-        ;; the digest with still-running cells' progress. Gated on the trace
-        ;; flag -- BUILD_CONSOLE_OUTPUT counters accrue on every SWB build, so
-        ;; without this gate the digest fired even when --swb-trace was absent.
-        (when (and swb (swb-runner-config-trace swb))
-          (dolist (st states)
-            (let ((*xcbuild-emit-prefix* (getf st :label)))
-              (xcbuild-emit-trace-digest console (getf st :stats)
-                                         :trace-file (getf st :events-file))))
-          (xcbuild-emit-trace-combined console
-                                       (mapcar (lambda (s) (getf s :stats)) states)))
+        (xcbuild-parallel-emit-trace-digests console swb states)
         ;; Combined matrix verdict is appended below the per-cell summary rows
         ;; in xcbuild-multi-progress's :final draw, so the banner is the last
         ;; line of the finalized canvas rather than scrollback above it.

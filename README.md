@@ -46,6 +46,8 @@ cupertino init                       # interactively set project defaults
 cupertino build                      # build using configured scheme(s)/destination(s)
 cupertino test                       # run tests
 cupertino install --sim <UDID>       # build & install to a simulator, then stream logs
+cupertino install --pick             # Xcode-style picker: choose sim or device interactively
+cupertino install --pick --save      # ...and persist the choice as the project default
 ```
 
 Once defaults are configured you can usually run `cupertino build` / `test` /
@@ -60,7 +62,8 @@ Once defaults are configured you can usually run `cupertino build` / `test` /
 | `build`   | Build the Xcode project across the scheme × destination matrix. |
 | `test`    | Run tests; supports `--only-testing` / `--skip-testing` filters. |
 | `clean`   | Clean build products; `--prune` also removes cupertino's per-cell DerivedData. |
-| `install` | Build and install the app to a simulator or device and stream its logs. |
+| `install` | Build and install the app to a simulator or device and stream its logs. `--pick` opens an Xcode-style unified destination chooser; `--save` makes the choice sticky. |
+| `pick`    | Interactively pick a simulator / device / scheme / cell; result on stdout, prose on stderr so it composes with `$(...)`. Sub-commands: `pick sim`, `pick device`, `pick scheme`, `pick test-scheme`, `pick cell`, `pick test-cell`. Add `--save` to persist (cells append; `--replace` overwrites). |
 | `info`    | Display project, simulator, or physical-device information (`info project` / `info sim` / `info device`). |
 | `dot`     | Generate a tree representation of the project model in Graphviz Dot format. |
 
@@ -77,6 +80,8 @@ A *cell* is one `scheme@destination` pairing. You can drive the matrix in two wa
 ```sh
 cupertino build --cell 'MyApp@sim=ABC123' --cell 'MyApp@device=UDID9'
 cupertino test  -s MyApp --sim ABC123 --sim DEF456 -j 2
+cupertino build --cell "$(cupertino pick cell)"   # interactively build one cell
+cupertino pick cell --save                        # append a cell to project defaults
 ```
 
 Common flags shared by `build` / `test` / `clean`:

@@ -13,6 +13,7 @@
    (install/command)
    (config/command)
    (init/command)
+   (pick/top-level/command)
    (dot/command)))
 
 (defun dot/command ()

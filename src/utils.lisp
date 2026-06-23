@@ -61,6 +61,10 @@ CONTROL is a FORMAT control string (without the prefix or trailing newline)."
   `(format t ,(concatenate 'string "~A " control "~%")
            (colored-text "Note:" :yellow) ,@args))
 
+(defun stdin-interactive-p ()
+  "T when *standard-input* is connected to a TTY suitable for prompting."
+  (and (interactive-stream-p *standard-input*) t))
+
 ;;; Determine color based on text value
 (defun text-value-to-color (text)
   "Determine color based on the content/value of TEXT."

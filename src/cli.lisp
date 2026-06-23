@@ -229,54 +229,77 @@ With options, updates the config file. Without options, prints the current confi
 
 ;; Init command — interactive project setup
 
-(defun prompt-choice (label items &key (display-fn #'identity) (allow-none nil))
-  "Display a numbered list of ITEMS and prompt the user to pick one.
-Returns the selected item, or NIL if ALLOW-NONE and the user enters nothing."
-  (format t "~%~A:~%" (colored-text label :cyan))
-  (loop for item in items
-        for i from 1
-        do (format t "  ~A ~A~%"
-                   (colored-text (format nil "~D." i) :yellow)
-                   (colored-text (funcall display-fn item) :green)))
-  (when allow-none
-    (format t "  ~A ~A~%"
-            (colored-text "0." :yellow)
-            (colored-text "(none)" :bright-black)))
-  (loop
-    (format t "~A " (colored-text (format nil "Select [~:[1~;0~]]:" allow-none) :white))
-    (force-output)
-    (let* ((line (str:trim (read-line *standard-input* nil "")))
-           (n (handler-case (parse-integer line :junk-allowed nil)
-                (error () nil))))
-      (cond
-        ((and (string= line "") (not allow-none) items)
-         (return (first items)))
-        ((and (string= line "") allow-none)
-         (return nil))
-        ((and n (= n 0) allow-none)
-         (return nil))
-        ((and n (>= n 1) (<= n (length items)))
-         (return (nth (1- n) items)))
-        (t (format t "Invalid choice, try again.~%"))))))
-
-(defun collect-available-sims ()
-  "Return a list of (name udid state) for available simulators."
-  (let ((sim-info (list-sim-info))
-        (results nil))
-    (when sim-info
-      (let ((devices (gethash "devices" sim-info)))
-        (when devices
-          (maphash (lambda (platform device-list)
-                     (declare (ignore platform))
-                     (dolist (d device-list)
-                       (when (and (gethash "isAvailable" d)
-                                  (not (gethash "availabilityError" d)))
-                         (push (list (gethash "name" d)
-                                     (gethash "udid" d)
-                                     (gethash "state" d))
-                               results))))
-                   devices))))
-    (nreverse results)))
+(defun prompt-choice (label items
+                      &key (display-fn #'identity)
+                           (allow-none nil)
+                           (prompt-stream *standard-output*)
+                           (default-index nil))
+  "Display LABEL and a numbered list of ITEMS on PROMPT-STREAM and read a
+selection from *standard-input*. ITEMS entries may be plain objects, or
+plists shaped as (:header STRING) or (:item OBJ ...). For :item entries the
+returned value is the plist itself (callers extract :item/:udid as needed);
+plain objects are returned as-is. When DEFAULT-INDEX is non-NIL it is the
+1-based index (over selectable entries, skipping headers) of the item picked
+on bare Enter; that entry is marked `(current)' in the menu and the prompt
+suffix advertises `Enter for current'. Returns the chosen object, or NIL when
+ALLOW-NONE and the user enters `0' / EOF / bare Enter without a default."
+  (let* ((selectable (remove-if (lambda (it)
+                                  (and (consp it) (eq (first it) :header)))
+                                items))
+         (n-sel (length selectable)))
+    (format prompt-stream "~%~A:~%" (colored-text label :cyan))
+    (let ((sel-idx 0))
+      (dolist (it items)
+        (cond
+          ((and (consp it) (eq (first it) :header))
+           (format prompt-stream "  ~A~%"
+                   (colored-text (format nil "-- ~A --" (getf it :header))
+                                 :bright-black)))
+          (t
+           (incf sel-idx)
+           (let ((display (cond ((and (consp it) (eq (first it) :item))
+                                 (or (getf it :display)
+                                     (funcall display-fn (getf it :item))))
+                                (t (funcall display-fn it)))))
+             (format prompt-stream "  ~A ~A~%"
+                     (colored-text (format nil "~D." sel-idx) :yellow)
+                     (colored-text display :green)))))))
+    (when allow-none
+      (format prompt-stream "  ~A ~A~%"
+              (colored-text "0." :yellow)
+              (colored-text "(none)" :bright-black)))
+    (let ((suffix (with-output-to-string (s)
+                    (write-string "Select " s)
+                    (write-string (string-downcase label) s)
+                    (when (plusp n-sel)
+                      (format s " [1-~D" n-sel)
+                      (when allow-none (write-string ", 0 to skip" s))
+                      (when default-index (write-string ", Enter for current" s))
+                      (write-string "]" s))
+                    (write-string ": " s))))
+      (loop
+        (format prompt-stream "~A" (colored-text suffix :white))
+        (force-output prompt-stream)
+        (let* ((raw (read-line *standard-input* nil nil))
+               (line (and raw (str:trim raw)))
+               (n (and line
+                       (handler-case (parse-integer line :junk-allowed nil)
+                         (error () nil)))))
+          (cond
+            ;; EOF -> abort
+            ((null raw) (return nil))
+            ;; Bare Enter with a default -> pick the default
+            ((and (string= line "") default-index
+                  (>= default-index 1) (<= default-index n-sel))
+             (return (nth (1- default-index) selectable)))
+            ;; Bare Enter, no default, allow-none -> NIL
+            ((and (string= line "") allow-none)
+             (return nil))
+            ((and n (= n 0) allow-none)
+             (return nil))
+            ((and n (>= n 1) (<= n n-sel))
+             (return (nth (1- n) selectable)))
+            (t (format prompt-stream "Invalid choice, try again.~%"))))))))
 
 (defun find-project-files (dir)
   "Recursively find all .xcworkspace and .xcodeproj directories under DIR.
@@ -304,8 +327,12 @@ Returns a list of (type path) pairs where type is :workspace or :project."
   "Handler for the `init' command. Interactively sets up project configuration."
   (let* ((path (first (clingon:command-arguments cmd)))
          (dir (or path (uiop:getcwd)))
+         (interactive (stdin-interactive-p))
+         (existing (ignore-errors (model:load-model path)))
          (found (find-project-files dir))
          (target nil))
+    (unless interactive
+      (cup-warn "running non-interactively; skipping picker prompts"))
     (unless found
       (cup-error "No .xcodeproj or .xcworkspace found in ~A" dir)
       (uiop:quit 1))
@@ -327,28 +354,41 @@ Returns a list of (type path) pairs where type is :workspace or :project."
              (schemes (when project-info (gethash "schemes" project-info)))
              (scheme nil)
              (test-scheme nil)
-             (sim nil))
-        (if schemes
-            (progn
-              (setf scheme (prompt-choice "Select default build scheme" schemes))
-              (setf test-scheme (prompt-choice "Select default test scheme" schemes
-                                               :allow-none t)))
-            (format t "~A~%" (colored-text "No schemes found in project." :yellow)))
-        ;; Discover simulators
-        (let ((sims (collect-available-sims)))
-          (if sims
-              (let ((chosen (prompt-choice "Select default simulator" sims
-                              :display-fn (lambda (s)
-                                            (format nil "~A [~A] (~A)"
-                                                    (first s) (second s) (third s))))))
-                (when chosen
-                  (setf sim (second chosen))))
-              (format t "~A~%" (colored-text "No available simulators found." :yellow))))
+             (sim nil)
+             (device nil))
+        (cond
+          ((not schemes)
+           (format t "~A~%" (colored-text "No schemes found in project." :yellow)))
+          (interactive
+           ;; Build scheme is required; test scheme is optional. Both reuse
+           ;; the picker so single-option auto-pick and (current) marking
+           ;; apply uniformly.
+           (setf scheme (pick-project-schemes
+                         :schemes schemes
+                         :current-scheme (getf existing :scheme)
+                         :label "Select default build scheme"
+                         :allow-none nil))
+           (setf test-scheme (pick-project-schemes
+                              :schemes schemes
+                              :current-scheme (getf existing :test-scheme)
+                              :label "Select default test scheme"))))
+        (when interactive
+          ;; Discover simulators (picker uses *error-output* for consistency with `pick').
+          (setf sim (pick-available-sims :current-udid (getf existing :sim)))
+          (unless sim
+            (format *error-output* "~A~%"
+                    (colored-text "No available simulators found." :yellow)))
+          ;; Discover physical devices.
+          (setf device (pick-connected-devices
+                        :current-udid (getf existing :device)))
+          (unless device
+            (format *error-output* "~A~%"
+                    (colored-text "No connected devices found." :yellow))))
         ;; Write config
         (let ((plist (list :project-type target-type
                            :project-path (namestring target-path)
                            :sim sim
-                           :device nil
+                           :device device
                            :scheme scheme
                            :test-scheme test-scheme
                            :use-swb nil)))
@@ -365,3 +405,251 @@ Returns a list of (type path) pairs where type is :workspace or :project."
    :name "init"
    :description "Interactively set up project configuration"
    :handler #'init/handler))
+
+;; Pick command — interactive UDID selection. Menus and prompts go to
+;; *error-output*; the chosen UDID goes to *standard-output* so shell
+;; substitution (`cupertino build --sim "$(cupertino pick sim)"`) is safe.
+;; `--save' merges :sim / :device into .cupertino/cupertino.lisp via
+;; model:update-model-config (which auto-creates the config on a virgin
+;; project, so the flag works even before `cupertino init').
+
+(defun pick/sim/options ()
+  (list (clingon:make-option
+         :flag
+         :description "save the picked UDID to .cupertino/cupertino.lisp"
+         :long-name "save"
+         :key :save)))
+
+(defun pick/sim/run (cmd)
+  "Body of `cupertino pick sim'. Returns the exit code instead of quitting so
+tests can drive it without bailing out of the Lisp image."
+  (cond
+    ((not (stdin-interactive-p))
+     (cup-error "`cupertino pick sim' needs an interactive terminal (stdin is not a TTY).")
+     1)
+    (t
+     (let* ((cfg-path (first (clingon:command-arguments cmd)))
+            (current (getf (ignore-errors (model:load-model cfg-path)) :sim))
+            (udid (pick-available-sims :current-udid current)))
+       (cond
+         ((null udid)
+          (cup-error "No available simulators to pick from. Try `cupertino info sim'.")
+          1)
+         (t
+          (format *error-output* "~A: ~A~%"
+                  (colored-text "Picked" :cyan) udid)
+          (format *standard-output* "~A~%" udid)
+          (when (clingon:getopt cmd :save)
+            (model:update-model-config cfg-path (list :sim udid))
+            (format *error-output* "~A :sim ~A~%"
+                    (colored-text "saved" :green) udid))
+          0))))))
+
+(defun pick/sim/handler (cmd)
+  (uiop:quit (pick/sim/run cmd)))
+
+(defun pick/sim/command ()
+  (clingon:make-command :name "sim"
+                        :description "Interactively pick a simulator UDID"
+                        :options (pick/sim/options)
+                        :handler #'pick/sim/handler))
+
+(defun pick/device/options ()
+  (list (clingon:make-option
+         :flag
+         :description "save the picked UDID to .cupertino/cupertino.lisp"
+         :long-name "save"
+         :key :save)))
+
+(defun pick/device/run (cmd)
+  "Body of `cupertino pick device'. Returns the exit code instead of quitting
+so tests can drive it without bailing out of the Lisp image."
+  (cond
+    ((not (stdin-interactive-p))
+     (cup-error "`cupertino pick device' needs an interactive terminal (stdin is not a TTY).")
+     1)
+    (t
+     (let* ((cfg-path (first (clingon:command-arguments cmd)))
+            (current (getf (ignore-errors (model:load-model cfg-path)) :device))
+            (udid (pick-connected-devices :current-udid current)))
+       (cond
+         ((null udid)
+          (cup-error "No connected devices to pick from. Try `cupertino info device'.")
+          1)
+         (t
+          (format *error-output* "~A: ~A~%"
+                  (colored-text "Picked" :cyan) udid)
+          (format *standard-output* "~A~%" udid)
+          (when (clingon:getopt cmd :save)
+            (model:update-model-config cfg-path (list :device udid))
+            (format *error-output* "~A :device ~A~%"
+                    (colored-text "saved" :green) udid))
+          0))))))
+
+(defun pick/device/handler (cmd)
+  (uiop:quit (pick/device/run cmd)))
+
+(defun pick/device/command ()
+  (clingon:make-command :name "device"
+                        :description "Interactively pick a physical device UDID"
+                        :options (pick/device/options)
+                        :handler #'pick/device/handler))
+
+;; `pick scheme` / `pick test-scheme` share the same skeleton as sim/device:
+;; chosen scheme name on *standard-output*, prose on *error-output*, optional
+;; `--save' persists to the config. The two commands differ only in which
+;; config key (:scheme vs :test-scheme) and prompt label they use.
+
+(defun pick/scheme/options ()
+  (list (clingon:make-option
+         :flag
+         :description "save the picked scheme to .cupertino/cupertino.lisp"
+         :long-name "save"
+         :key :save)))
+
+(defun pick/scheme/run-with (cmd config-key label)
+  "Shared body for `pick scheme' and `pick test-scheme'. CONFIG-KEY is the
+plist key (:scheme or :test-scheme) used both to seed the (current) marker
+from the existing config and to persist with --save. Returns the exit code."
+  (cond
+    ((not (stdin-interactive-p))
+     (cup-error "`cupertino pick ~A' needs an interactive terminal (stdin is not a TTY)."
+                (string-downcase (symbol-name config-key)))
+     1)
+    (t
+     (let* ((cfg-path (first (clingon:command-arguments cmd)))
+            (current (getf (ignore-errors (model:load-model cfg-path)) config-key))
+            (scheme (pick-project-schemes :dir cfg-path
+                                          :current-scheme current
+                                          :label label)))
+       (cond
+         ((null scheme)
+          (cup-error "No schemes to pick from. Try `cupertino info project'.")
+          1)
+         (t
+          (format *error-output* "~A: ~A~%"
+                  (colored-text "Picked" :cyan) scheme)
+          (format *standard-output* "~A~%" scheme)
+          (when (clingon:getopt cmd :save)
+            (model:update-model-config cfg-path (list config-key scheme))
+            (format *error-output* "~A ~A ~A~%"
+                    (colored-text "saved" :green) config-key scheme))
+          0))))))
+
+(defun pick/scheme/run (cmd)
+  (pick/scheme/run-with cmd :scheme "Select scheme"))
+
+(defun pick/scheme/handler (cmd)
+  (uiop:quit (pick/scheme/run cmd)))
+
+(defun pick/scheme/command ()
+  (clingon:make-command :name "scheme"
+                        :description "Interactively pick a build scheme"
+                        :options (pick/scheme/options)
+                        :handler #'pick/scheme/handler))
+
+(defun pick/test-scheme/run (cmd)
+  (pick/scheme/run-with cmd :test-scheme "Select test scheme"))
+
+(defun pick/test-scheme/handler (cmd)
+  (uiop:quit (pick/test-scheme/run cmd)))
+
+(defun pick/test-scheme/command ()
+  (clingon:make-command :name "test-scheme"
+                        :description "Interactively pick a test scheme"
+                        :options (pick/scheme/options)
+                        :handler #'pick/test-scheme/handler))
+
+;; `pick cell` / `pick test-cell` walk scheme then destination (unified sims +
+;; devices) and emit the `Scheme@sim=UDID' / `Scheme@device=UDID' string the
+;; matrix runner consumes via --cell. --save appends to :cells / :test-cells;
+;; --save --replace overwrites the saved list with [picked-cell].
+
+(defun pick/cell/options ()
+  (list (clingon:make-option
+         :flag
+         :description "append the picked cell to .cupertino/cupertino.lisp"
+         :long-name "save"
+         :key :save)
+        (clingon:make-option
+         :flag
+         :description "with --save, replace the saved list instead of appending"
+         :long-name "replace"
+         :key :replace)))
+
+(defun pick/cell/run-with (cmd cmd-name config-key scheme-key label)
+  "Shared body for `pick cell' and `pick test-cell'. CMD-NAME is the
+sub-command label used in error messages (`cell' / `test-cell'). CONFIG-KEY
+is the plist key (:cells / :test-cells) the picker appends to with --save.
+SCHEME-KEY (:scheme / :test-scheme) seeds the scheme picker's (current)
+marker from the model. Returns the exit code."
+  (cond
+    ((not (stdin-interactive-p))
+     (cup-error "`cupertino pick ~A' needs an interactive terminal (stdin is not a TTY)." cmd-name)
+     1)
+    (t
+     (let* ((cfg-path (first (clingon:command-arguments cmd)))
+            (model-plist (ignore-errors (model:load-model cfg-path)))
+            (current-scheme (getf model-plist scheme-key))
+            (current-udid (or (getf model-plist :device) (getf model-plist :sim)))
+            (cell (pick-cell :dir cfg-path
+                             :current-scheme current-scheme
+                             :current-udid current-udid
+                             :label label)))
+       (cond
+         ((null cell)
+          (cup-error "No cell picked.")
+          1)
+         (t
+          (format *error-output* "~A: ~A~%"
+                  (colored-text "Picked" :cyan) cell)
+          (format *standard-output* "~A~%" cell)
+          (when (clingon:getopt cmd :save)
+            (let* ((existing (alexandria:ensure-list (getf model-plist config-key)))
+                   (merged (if (clingon:getopt cmd :replace)
+                               (list cell)
+                               (append existing (list cell)))))
+              (model:update-model-config cfg-path (list config-key merged))
+              (format *error-output* "~A ~A ~A~%"
+                      (colored-text "saved" :green) config-key merged)))
+          0))))))
+
+(defun pick/cell/run (cmd)
+  (pick/cell/run-with cmd "cell" :cells :scheme "Select scheme for cell"))
+
+(defun pick/cell/handler (cmd)
+  (uiop:quit (pick/cell/run cmd)))
+
+(defun pick/cell/command ()
+  (clingon:make-command :name "cell"
+                        :description "Interactively pick a scheme@destination build cell"
+                        :options (pick/cell/options)
+                        :handler #'pick/cell/handler))
+
+(defun pick/test-cell/run (cmd)
+  (pick/cell/run-with cmd "test-cell" :test-cells :test-scheme
+                      "Select test scheme for cell"))
+
+(defun pick/test-cell/handler (cmd)
+  (uiop:quit (pick/test-cell/run cmd)))
+
+(defun pick/test-cell/command ()
+  (clingon:make-command :name "test-cell"
+                        :description "Interactively pick a scheme@destination test cell"
+                        :options (pick/cell/options)
+                        :handler #'pick/test-cell/handler))
+
+(defun pick/top-level/sub-commands ()
+  (list (pick/sim/command) (pick/device/command)
+        (pick/scheme/command) (pick/test-scheme/command)
+        (pick/cell/command) (pick/test-cell/command)))
+
+(defun pick/top-level/handler (cmd)
+  (clingon:print-usage-and-exit cmd t))
+
+(defun pick/top-level/command ()
+  (clingon:make-command :name "pick"
+                        :description "Interactively pick a simulator, device, scheme, or cell"
+                        :handler #'pick/top-level/handler
+                        :options (list)
+                        :sub-commands (pick/top-level/sub-commands)))

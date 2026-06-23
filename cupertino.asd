@@ -37,6 +37,7 @@
                (:file "xcbuild-pretty")
                (:file "xcode-tools")
                (:file "xcbuild-parallel")
+               (:file "pick")
                (:file "install")
                (:file "cli")
                (:file "main")))
@@ -48,7 +49,8 @@
   :serial t
   :components ((:file "package")
                (:file "cell-tests")
-               (:file "xcbuild-pretty-tests"))
+               (:file "xcbuild-pretty-tests")
+               (:file "pick-tests"))
   :perform (asdf:test-op (o c)
              (unless (uiop:symbol-call '#:rove '#:run-suite :cupertino/tests)
                (error "Tests failed"))))
