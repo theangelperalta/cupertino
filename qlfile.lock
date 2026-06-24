@@ -5,4 +5,4 @@
 ("supercons" .
  (:class qlot/source/git:source-git
   :initargs (:remote-url "https://github.com/theangelperalta/supercons.git")
-  :version "git-bdca958c9926b42b38e490993d3dd3416fe37330"))
+  :version "git-2760db35c31bdc3729b659a067e41bbe3f4ea36c"))
