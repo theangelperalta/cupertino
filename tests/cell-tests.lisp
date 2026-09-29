@@ -253,6 +253,16 @@ produces for `xcrun simctl list --json' (object -> hash, array -> list)."
     (ok (string= "dev:D9"
                  (cupertino::destination-label "platform=iOS,id=D9")))))
 
+(deftest destination-udid/strips-trailing-clauses
+  (ok (string= "AAA"
+               (cupertino::destination-udid "platform=iOS Simulator,id=AAA,arch=arm64")))
+  (ok (string= "F64AA00C-829C-4EB7-BD07-7D34824C3034"
+               (cupertino::destination-udid
+                "-destination platform=iOS Simulator,id=F64AA00C-829C-4EB7-BD07-7D34824C3034 -configuration Debug test")))
+  (ok (string= "D9" (cupertino::destination-udid "platform=iOS,id=D9")))
+  (ok (null (cupertino::destination-udid "platform=macOS")))
+  (ok (null (cupertino::destination-udid nil))))
+
 ;;; -------------------------------------------------------------------------
 ;;; sanitize-path-component / cell-derived-data-dir
 ;;; -------------------------------------------------------------------------

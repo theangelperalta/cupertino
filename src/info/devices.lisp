@@ -98,9 +98,12 @@ simctl DEVICE-INFO, or NIL when absent."
 ;; Physical Device Info 
 
 (defun print-device-info ()
-    (format-table t (list-device-names) 
-                    :column-label '("NAME" "OS VERSION" "HOSTNAME" "ID" "STATE" "MODEL" "LAST CONNECTED")
-                    :column-align '(:left :left :left :left :left :left :left)))
+  (let ((rows (list-device-names)))
+    (if rows
+        (format-table t rows
+                      :column-label '("NAME" "OS VERSION" "HOSTNAME" "ID" "STATE" "MODEL" "LAST CONNECTED")
+                      :column-align '(:left :left :left :left :left :left :left))
+        (format t "No physical devices found.~%"))))
 
 (defun list-device-info ()
   "Run the devicectl command, save output to a temporary file, extract JSON using sed,
@@ -173,24 +176,63 @@ Returns the parsed Lisp structure."
             do (push device connected))
     (nreverse connected)))
 
-;;; Helper to get device names and states
-(defun list-device-names ()
-  "Fetch devices and return a list of (name . state) pairs."
-  (let* ((devices (list-device-info))
-         (parsed-devices '()))
-    (loop for device across devices
-          for identifier = (gethash "identifier" device)
-          for dev-props = (gethash "deviceProperties" device)
-          for hardware-props = (gethash "hardwareProperties" device)
-          for os-version = (gethash "osVersionNumber" dev-props)
-          for conn-props = (gethash "connectionProperties" device)
-          for hostname = (aref (gethash "potentialHostnames" conn-props) 0)
-          for model = (gethash "marketingName" hardware-props)
-          for product-type = (gethash "productType" hardware-props)
-          for name = (gethash "name" dev-props)
-          for state = (gethash "tunnelState" conn-props)
-          for transport-type = (gethash "transportType" conn-props)
-          for last-connection-date-time = (gethash "lastConnectionDate" conn-props)
+(defun json-seq-first (seq)
+  "First element of a JSON array parsed as a list or vector, or NIL if empty.
+Yason may represent `[]` as an adjustable vector whose fill-pointer is 0 but
+whose backing store is still readable via AREF, so LENGTH (not AREF) is the
+emptiness check."
+  (when (and seq (plusp (length seq)))
+    (elt seq 0)))
 
-          do (push (list name os-version hostname identifier (if transport-type (format nil "~a (~a)" state transport-type) state) (format nil "~a (~a)" model product-type) (format-relative-time last-connection-date-time)) parsed-devices))
+(defun device-reality (device)
+  "devicectl `reality` value (`physical` / `simulated`), or NIL when absent."
+  (or (let ((hp (gethash "hardwareProperties" device)))
+        (and hp (gethash "reality" hp)))
+      (let* ((props (gethash "properties" device))
+             (hw (and props (gethash "hardware" props))))
+        (and hw (gethash "reality" hw)))))
+
+(defun physical-device-p (device)
+  "T unless DEVICE is known to be a simulator. Unknown/missing reality is
+treated as physical so older devicectl payloads still list."
+  (not (equal (device-reality device) "simulated")))
+
+(defun device-table-row (device)
+  "One `info device` table row (list of cell strings/values) for DEVICE."
+  (let* ((dev-props (gethash "deviceProperties" device))
+         (hardware-props (gethash "hardwareProperties" device))
+         (conn-props (gethash "connectionProperties" device))
+         (identifier (and device (gethash "identifier" device)))
+         (os-version (and dev-props (gethash "osVersionNumber" dev-props)))
+         (hostname (json-seq-first (and conn-props (gethash "potentialHostnames" conn-props))))
+         (model (and hardware-props (gethash "marketingName" hardware-props)))
+         (product-type (and hardware-props (gethash "productType" hardware-props)))
+         (name (and dev-props (gethash "name" dev-props)))
+         (state (and conn-props (gethash "tunnelState" conn-props)))
+         (transport-type (and conn-props (gethash "transportType" conn-props)))
+         (last-connection (and conn-props (gethash "lastConnectionDate" conn-props)))
+         (state-cell (if transport-type
+                         (format nil "~a (~a)" (or state "") transport-type)
+                         (or state "")))
+         (model-cell (cond ((and model product-type)
+                            (format nil "~a (~a)" model product-type))
+                           (t (or model product-type "")))))
+    (list (or name "")
+          (or os-version "")
+          (or hostname "")
+          (or identifier "")
+          state-cell
+          model-cell
+          (format-relative-time last-connection))))
+
+(defun list-device-names (&optional (devices nil devices-supplied-p))
+  "Physical-device rows for `info device'. DEVICES, when supplied, bypasses
+devicectl (used by tests); otherwise LIST-DEVICE-INFO is called."
+  (let* ((devices (if devices-supplied-p devices (list-device-info)))
+         (parsed-devices '()))
+    (map nil
+         (lambda (device)
+           (when (physical-device-p device)
+             (push (device-table-row device) parsed-devices)))
+         devices)
     (nreverse parsed-devices)))

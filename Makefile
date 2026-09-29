@@ -7,7 +7,7 @@ deps:
 	qlot install
 
 build: deps
-	qlot exec ros build roswell/cupertino.ros
+	qlot exec ros -Q dump executable roswell/cupertino.ros
 
 test: deps
 	qlot exec ros run -- --non-interactive \

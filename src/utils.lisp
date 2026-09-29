@@ -142,7 +142,11 @@ CONTROL is a FORMAT control string (without the prefix or trailing newline)."
     (encode-universal-time second minute hour day month year 0)))
 
 (defun format-relative-time (timestamp-string)
-  "Format a timestamp as relative time (e.g., '2 hours ago', '3 days ago')."
+  "Format a timestamp as relative time (e.g., '2 hours ago', '3 days ago').
+Returns an empty string when TIMESTAMP-STRING is missing or not a string —
+devicectl omits lastConnectionDate for some devices."
+  (unless (and (stringp timestamp-string) (plusp (length timestamp-string)))
+    (return-from format-relative-time ""))
   (let* ((then (parse-iso8601-timestamp timestamp-string))
          (now (get-universal-time))
          (diff (- now then))

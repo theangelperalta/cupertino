@@ -191,13 +191,26 @@ single-path generic device destination."
      (when (and (null sims) (null devs))
        (let ((d (resolve-destination cmd model))) (when d (list d)))))))
 
+(defun destination-udid (dest)
+  "The `id=' value from a -destination string DEST, stopping at the first
+character that is not alphanumeric or `-'. NIL when DEST has no `id=' clause."
+  (when (and (stringp dest) (plusp (length dest)))
+    (let ((p (search "id=" dest)))
+      (when p
+        (let* ((start (+ p 3))
+               (end (or (position-if-not
+                         (lambda (c) (or (alphanumericp c) (char= c #\-)))
+                         dest :start start)
+                        (length dest))))
+          (when (< start end)
+            (subseq dest start end)))))))
+
 (defun destination-label (dest)
   "Short label for a -destination string used in panel headers. Simulator
 destinations are enriched with the device model and runtime name (e.g.
 \"sim:UDID (iPhone 17 Pro, iOS 26.5)\") when the simctl lookup succeeds;
 otherwise the bare \"sim:UDID\" form is preserved."
-  (let* ((p (search "id=" dest))
-         (udid (when p (subseq dest (+ p 3)))))
+  (let ((udid (destination-udid dest)))
     (cond
       ((search "Simulator" dest)
        (let ((base (format nil "sim:~A" (or udid dest))))
@@ -447,7 +460,8 @@ runs standalone (no xcodebuild clean)."
            (*xcbuild-show-cache-hits*
              (cond ((clingon:getopt cmd :cache-hits) t)
                    ((member :cache-hits (model:load-model path)) (model-cache-hits model))
-                   (t want-swb))))
+                   (t want-swb)))
+           (jobs (clingon:getopt cmd :jobs)))
       (dolist (c cells) (reset-result-bundle (getf c :xcresult)))
       ;; Show every command we're about to run, in both single and parallel
       ;; paths, before the dispatch bifurcation.
@@ -486,7 +500,7 @@ runs standalone (no xcodebuild clean)."
                 (let ((exit-code
                         (run-xcodebuild/parallel
                          cells action
-                         :jobs (or (clingon:getopt cmd :jobs) (length cells))
+                         :jobs jobs
                          :fail-fast (clingon:getopt cmd :fail-fast)
                          :swb config)))
                   (report-result-bundles cells)
