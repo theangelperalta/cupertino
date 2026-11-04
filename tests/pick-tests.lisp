@@ -43,8 +43,10 @@ filters on."
     info))
 
 (defun make-pick-device (name udid transport
-                        &key (tunnel-state "connected"))
-  "Build a fake devicectl-shaped device hash with the keys the picker reads."
+                        &key (tunnel-state "connected") hardware-udid)
+  "Build a fake devicectl-shaped device hash with the keys the picker reads.
+UDID is the CoreDevice identifier. HARDWARE-UDID, when set, is what the picker
+returns — that is the id xcodebuild can install to."
   (let ((d (make-hash-table :test 'equal))
         (cp (make-hash-table :test 'equal))
         (dp (make-hash-table :test 'equal)))
@@ -54,6 +56,12 @@ filters on."
           (gethash "identifier" d) udid
           (gethash "deviceProperties" d) dp
           (gethash "connectionProperties" d) cp)
+    (when hardware-udid
+      (let ((hp (make-hash-table :test 'equal)))
+        (setf (gethash "udid" hp) hardware-udid
+              (gethash "platform" hp) "iOS"
+              (gethash "reality" hp) "physical"
+              (gethash "hardwareProperties" d) hp)))
     d))
 
 (defmacro with-pick-streams ((&key (input "") prompt stdout) &body body)
@@ -206,18 +214,34 @@ streams (capturing into the supplied symbols when provided) for BODY."
 ;;; pick-connected-devices
 ;;; -------------------------------------------------------------------------
 
-(deftest pick-connected-devices/filters-disconnected
-  ;; A connected USB device + a disconnected one. With just the survivor the
-  ;; auto-pick branch fires — no prompt, no menu entries for the disconnected.
+(deftest pick-connected-devices/filters-unavailable
+  ;; A reachable device plus an unavailable one. With just the survivor the
+  ;; auto-pick branch fires — no prompt, no menu entry for the unavailable phone.
   (with-pick-streams (:input "" :prompt p)
     (let* ((devs (list (make-pick-device "iPhone OK" "udid-ok" "USB"
                                          :tunnel-state "connected")
                        (make-pick-device "iPhone OLD" "udid-old" "USB"
-                                         :tunnel-state "disconnected")))
+                                         :tunnel-state "unavailable")))
            (r (cupertino::pick-connected-devices :devices devs
                                                  :stream *error-output*)))
       (ok (string= "udid-ok" r))
       (ok (null (search "iPhone OLD" (get-output-stream-string p)))))))
+
+(deftest pick-connected-devices/includes-disconnected-paired
+  ;; A disconnected tunnel is still paired. devicectl brings it up at install,
+  ;; and the value saved for xcodebuild is the hardware UDID, not the
+  ;; CoreDevice identifier.
+  (with-pick-streams (:input "" :prompt p)
+    (let* ((devs (list (make-pick-device "Work iPhone"
+                                         "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD"
+                                         "localNetwork"
+                                         :tunnel-state "disconnected"
+                                         :hardware-udid "00008110-000A7D442E8BA01E")))
+           (r (cupertino::pick-connected-devices :devices devs
+                                                 :stream *error-output*)))
+      (ok (string= "00008110-000A7D442E8BA01E" r))
+      (ok (null (search "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD"
+                        (get-output-stream-string p)))))))
 
 (deftest pick-connected-devices/usb-before-wifi
   (with-pick-streams (:input (format nil "1~%") :prompt p)

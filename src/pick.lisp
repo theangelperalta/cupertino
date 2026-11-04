@@ -95,8 +95,8 @@ a preformatted :display with ANSI colour codes and a UDID tail."
         (t 2)))
 
 (defun group-and-sort-devices (devices)
-  "Group DEVICES (already filtered to tunnelState=connected) by transport
-type. Returns a list of (TRANSPORT-NAME SORTED-DEVICE-HASHES); USB first,
+  "Group DEVICES (already filtered to installable) by transport type.
+Returns a list of (TRANSPORT-NAME SORTED-DEVICE-HASHES); USB first,
 Wi-Fi second, others after, alphabetical within each group."
   (let ((buckets (make-hash-table :test 'equal)))
     (dolist (d devices)
@@ -125,7 +125,8 @@ by PROMPT-CHOICE."
         (push (list :header (format nil "~A (~D)" t-type (length devs))) out)
         (dolist (d devs)
           (let* ((name (gethash "name" (gethash "deviceProperties" d)))
-                 (udid (gethash "identifier" d))
+                 (udid (or (device-hardware-udid d)
+                           (gethash "identifier" d)))
                  (tag-color (cond ((string-equal t-type "USB") :green)
                                   ((string-equal t-type "Wi-Fi") :cyan)
                                   (t nil)))
@@ -266,7 +267,7 @@ the caller can branch on simulator vs. device without re-matching UDIDs."
                                       current-udid
                                       (stream *error-output*))
   "Interactively pick one install destination from the unified set of
-available simulators and connected physical devices, mirroring Xcode's
+available simulators and installable physical devices, mirroring Xcode's
 run-destination dropdown. Returns a plist `(:kind :sim|:device :udid \"...\")'
 or NIL on allow-none / EOF / no-targets. Menu goes to STREAM. SIM-INFO and
 DEVICES, when supplied, bypass simctl / devicectl (used by tests).
@@ -284,17 +285,8 @@ sections, returns it without prompting."
                       :sim))
          (raw        (cond (devices-supplied-p devices)
                            (t (ignore-errors (list-device-info)))))
-         (connected  (when raw
-                       (let (acc)
-                         (map nil
-                              (lambda (d)
-                                (let* ((cp (gethash "connectionProperties" d))
-                                       (ts (and cp (gethash "tunnelState" cp))))
-                                  (when (and ts (string= ts "connected"))
-                                    (push d acc))))
-                              raw)
-                         (nreverse acc))))
-         (dev-grps   (and connected (group-and-sort-devices connected)))
+         (installable (when raw (select-installable-devices raw)))
+         (dev-grps   (and installable (group-and-sort-devices installable)))
          (dev-items  (tag-items-kind
                       (and dev-grps
                            (flatten-device-groups dev-grps
@@ -362,23 +354,16 @@ platform. SCHEMES / SIM-INFO / DEVICES, when supplied, bypass discovery
 (defun pick-connected-devices (&key (devices nil devices-supplied-p)
                                     current-udid
                                     (stream *error-output*))
-  "Interactively pick one connected physical device. Same conventions as
+  "Interactively pick one installable physical device. Same conventions as
 PICK-AVAILABLE-SIMS. DEVICES may be a list or vector of raw device hashes
-(as returned by LIST-DEVICE-INFO); only those with tunnelState=connected are
-considered. Default is to call LIST-DEVICE-INFO directly."
+(as returned by LIST-DEVICE-INFO). Paired devices with a disconnected tunnel
+are included; devicectl brings the tunnel up at install. Unavailable devices
+are skipped. The returned id is the hardware UDID when devicectl provides one.
+Default is to call LIST-DEVICE-INFO directly."
   (let* ((raw (cond (devices-supplied-p devices)
                     (t (ignore-errors (list-device-info)))))
-         (connected (when raw
-                      (let (acc)
-                        (map nil
-                             (lambda (d)
-                               (let* ((cp (gethash "connectionProperties" d))
-                                      (ts (and cp (gethash "tunnelState" cp))))
-                                 (when (and ts (string= ts "connected"))
-                                   (push d acc))))
-                             raw)
-                        (nreverse acc))))
-         (groups (and connected (group-and-sort-devices connected)))
+         (installable (when raw (select-installable-devices raw)))
+         (groups (and installable (group-and-sort-devices installable)))
          (items (and groups (flatten-device-groups groups
                                                    :current-udid current-udid)))
          (selectable (remove-if (lambda (it)

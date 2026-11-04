@@ -7,10 +7,16 @@
       (when (str:starts-with-p prefix line)
         (return (str:trim (subseq line (length prefix))))))))
 
-(defun get-build-settings (scheme configuration sdk xcworkspace-flag)
-  "Run xcodebuild -showBuildSettings and return the raw output string."
-  (let ((cmd (format nil "xcodebuild ~A -scheme '~A' -configuration ~A -sdk ~A -showBuildSettings"
-                     xcworkspace-flag scheme configuration sdk)))
+(defun get-build-settings (scheme configuration sdk xcworkspace-flag &optional destination)
+  "Run xcodebuild -showBuildSettings and return the raw output string.
+DESTINATION, when given, is the same -destination the build used so
+TARGET_BUILD_DIR matches that device or simulator."
+  (let ((cmd (format nil "xcodebuild ~A -scheme ~A -configuration ~A -sdk ~A~@[ -destination ~A~] -showBuildSettings"
+                     xcworkspace-flag
+                     (shell-quote-single scheme)
+                     configuration
+                     sdk
+                     (when destination (shell-quote-single destination)))))
     (uiop:run-program cmd :output :string :error-output nil)))
 
 (defun run-interactive (label cmd-str)
@@ -132,6 +138,31 @@ opposite slot so the destination stays sticky like Xcode's run-destination."
            (format *error-output* "~A ~S~%"
                    (colored-text "saved" :green) updates)))))))
 
+(defun resolve-install-target (cmd model)
+  "Return (values KIND ID) for this install.
+Explicit --device or --sim wins. Otherwise a configured device is the target,
+then the configured simulator. KIND is :device or :sim."
+  (cond
+    ((clingon:getopt cmd :device)
+     (values :device (clingon:getopt cmd :device)))
+    ((clingon:getopt cmd :sim)
+     (values :sim (clingon:getopt cmd :sim)))
+    ((model-device model)
+     (values :device (model-device model)))
+    (t
+     (values :sim (model-sim model)))))
+
+(defun pin-install-destination (model kind id)
+  "Point MODEL at KIND (:device or :sim) and ID, clearing the other slot.
+run-xcodebuild prefers a configured simulator over a configured device, so a
+device install has to clear the simulator or the .app is built for the sim."
+  (ecase kind
+    (:device (setf (model-device model) id
+                   (model-sim model) nil))
+    (:sim    (setf (model-sim model) id
+                   (model-device model) nil)))
+  model)
+
 (defun install/handler (cmd)
   "Handler for the `install' command.
 Builds the project then installs the .app to the target simulator or device."
@@ -145,32 +176,38 @@ Builds the project then installs the .app to the target simulator or device."
     ;; install/launch steps below.
     (when (clingon:getopt cmd :pick)
       (apply-install-pick cmd model))
-    (let* ((device-id (resolve-device-destination cmd model))
-           (sim-udid (unless device-id (resolve-sim-udid cmd model)))
-           (project-flag (resolve-project-flag cmd model))
-           (sdk (if device-id "iphoneos" "iphonesimulator")))
-    ;; Build using run-xcodebuild from xcode-tools
-    (run-xcodebuild cmd "build")
-    ;; Use -showBuildSettings to find app path and bundle ID
-    (let* ((settings-output (get-build-settings scheme configuration sdk project-flag))
-           (target-build-dir (get-build-setting settings-output "TARGET_BUILD_DIR"))
-           (wrapper-name (or (get-build-setting settings-output "WRAPPER_NAME")
-                             (get-build-setting settings-output "FULL_PRODUCT_NAME")))
-           (bundle-id (get-build-setting settings-output "PRODUCT_BUNDLE_IDENTIFIER"))
-           (app-path (when (and target-build-dir wrapper-name)
-                       (merge-pathnames wrapper-name
-                                        (format nil "~A/" target-build-dir)))))
-      (unless app-path
-        (cup-error "Could not determine .app path from build settings.")
-        (uiop:quit 1))
-      (unless bundle-id
-        (cup-error "Could not determine bundle identifier from build settings.")
-        (uiop:quit 1))
-      (if device-id
-          (progn (install-to-device device-id app-path)
-                 (launch-on-device device-id bundle-id))
-          (progn (install-to-simulator sim-udid app-path)
-                 (launch-on-simulator sim-udid bundle-id)))))))
+    (multiple-value-bind (kind target-id) (resolve-install-target cmd model)
+      (pin-install-destination model kind target-id)
+      (let* ((device-id (when (eq kind :device) target-id))
+             (sim-udid (when (eq kind :sim) target-id))
+             (project-flag (resolve-project-flag cmd model))
+             (destination (when device-id (device-destination device-id)))
+             (sdk (if device-id
+                      (device-sdk (destination-platform destination))
+                      "iphonesimulator")))
+        (run-xcodebuild cmd "build" :model model)
+        (let* ((settings-output (get-build-settings scheme configuration sdk
+                                                    project-flag destination))
+               (target-build-dir (get-build-setting settings-output "TARGET_BUILD_DIR"))
+               (wrapper-name (or (get-build-setting settings-output "WRAPPER_NAME")
+                                 (get-build-setting settings-output "FULL_PRODUCT_NAME")))
+               (bundle-id (get-build-setting settings-output "PRODUCT_BUNDLE_IDENTIFIER"))
+               (app-path (when (and target-build-dir wrapper-name)
+                           (merge-pathnames wrapper-name
+                                            (format nil "~A/" target-build-dir))))
+               (install-id (or (and destination (destination-udid destination))
+                               device-id)))
+          (unless app-path
+            (cup-error "Could not determine .app path from build settings.")
+            (uiop:quit 1))
+          (unless bundle-id
+            (cup-error "Could not determine bundle identifier from build settings.")
+            (uiop:quit 1))
+          (if device-id
+              (progn (install-to-device install-id app-path)
+                     (launch-on-device install-id bundle-id))
+              (progn (install-to-simulator sim-udid app-path)
+                     (launch-on-simulator sim-udid bundle-id))))))))
 
 (defun install/command ()
   "A command to build and install the app to a simulator or device."
