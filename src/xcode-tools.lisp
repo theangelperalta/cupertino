@@ -69,15 +69,50 @@ auto-detected via simctl. Falls back to iOS Simulator when undetectable."
                              (t (format nil "~A Simulator" plat)))))
     (format nil "platform=~A,id=~A" sim-platform udid)))
 
+(defun device-destination (device-id &optional (devices nil devices-supplied-p))
+  "xcodebuild -destination for physical device DEVICE-ID.
+DEVICE-ID may be a hardware UDID or a CoreDevice identifier. xcodebuild only
+matches the hardware UDID (`platform=iOS,id=00008110-...`), so a CoreDevice
+identifier is resolved through devicectl. DEVICES, when supplied, is that
+device list (tests pass it to avoid a lookup). Unknown ids fall back to
+`platform=iOS,id=DEVICE-ID`."
+  (let* ((devices (cond
+                    (devices-supplied-p devices)
+                    ((coredevice-identifier-p device-id) (current-physical-devices))
+                    (t nil)))
+         (found (find-physical-device device-id devices))
+         (udid (or (and found (device-hardware-udid found)) device-id))
+         (platform (or (and found (device-platform found)) "iOS")))
+    (format nil "platform=~A,id=~A" platform udid)))
+
+(defun destination-platform (dest)
+  "The `platform=` value of an xcodebuild -destination string DEST, or NIL."
+  (when (and (stringp dest) (str:starts-with-p "platform=" dest))
+    (let* ((start (length "platform="))
+           (comma (position #\, dest :start start)))
+      (subseq dest start (or comma (length dest))))))
+
+(defun device-sdk (platform)
+  "SDK name for a devicectl/xcodebuild device PLATFORM (`iOS` -> `iphoneos`)."
+  (cond
+    ((string-equal platform "tvOS") "appletvos")
+    ((string-equal platform "watchOS") "watchos")
+    ((or (string-equal platform "xrOS")
+         (string-equal platform "visionOS")) "xros")
+    (t "iphoneos")))
+
 (defun resolve-destination (cmd model)
-  "Resolve the xcodebuild destination from CLI options or model."
+  "Resolve the xcodebuild destination from CLI options or model.
+A device id becomes `platform=<platform>,id=<hardware UDID>` so the build is
+signed for that phone. `generic/platform=iOS` is the Any iOS Device placeholder
+and cannot deploy to a paired phone."
   (let ((sim (clingon:getopt cmd :sim))
         (device (clingon:getopt cmd :device)))
     (cond
       (sim (sim-destination sim))
-      (device "generic/platform=iOS")
+      (device (device-destination (if (consp device) (first device) device)))
       ((model-sim model) (sim-destination (model-sim model)))
-      ((model-device model) "generic/platform=iOS")
+      ((model-device model) (device-destination (model-device model)))
       (t nil))))
 
 (defun shell-quote-single (s)
@@ -181,13 +216,12 @@ per-cell DerivedData is already isolated by scheme/destination upstream."
 
 (defun resolve-destinations (cmd model)
   "List of xcodebuild -destination strings from repeatable --sim/--device, else
-the model's single destination. Devices are id-specific here (matrix), unlike the
-single-path generic device destination."
+the model's single destination. Device ids are resolved to hardware UDIDs."
   (let ((sims (let ((s (clingon:getopt cmd :sim)))    (if (consp s) s (when s (list s)))))
         (devs (let ((d (clingon:getopt cmd :device))) (if (consp d) d (when d (list d))))))
     (append
      (mapcar #'sim-destination sims)
-     (mapcar (lambda (u) (format nil "platform=iOS,id=~A" u)) devs)
+     (mapcar #'device-destination devs)
      (when (and (null sims) (null devs))
        (let ((d (resolve-destination cmd model))) (when d (list d)))))))
 
@@ -229,7 +263,7 @@ Accepts `sim=UDID', `device=UDID', a raw `platform=...' string, or a bare UDID
 (treated as a simulator). Simulator platforms are auto-detected via simctl."
   (cond
     ((str:starts-with-p "sim=" spec)      (sim-destination (subseq spec 4)))
-    ((str:starts-with-p "device=" spec)   (format nil "platform=iOS,id=~A" (subseq spec 7)))
+    ((str:starts-with-p "device=" spec)   (device-destination (subseq spec 7)))
     ((str:starts-with-p "platform=" spec) spec)
     (t (sim-destination spec))))
 
@@ -407,11 +441,14 @@ when the directory doesn't exist. Returns T when something was removed."
           nil))))
 
 (defun run-xcodebuild (cmd action &key (scheme-accessors (list #'model-scheme))
-                                       cell-accessors)
+                                       cell-accessors
+                                       model)
   "Run xcodebuild with the given action (build, test, clean, etc.).
 Builds a list of scheme/destination cells -- explicit --cell pairings, config
 :cells/:test-cells (via CELL-ACCESSORS), or the scheme x destination Cartesian
-product -- and runs them. A single cell uses the existing SWB/pretty/raw path;
+product -- and runs them. MODEL, when supplied, is used instead of re-reading
+.cupertino/cupertino.lisp so a caller can override the destination for this
+run. A single cell uses the existing SWB/pretty/raw path;
 multiple cells run concurrently under a combined dashboard via
 run-xcodebuild/parallel. With a single cell, --derived-data is forwarded
 verbatim as -derivedDataPath; with multiple cells, each cell gets its own
@@ -422,7 +459,7 @@ For the clean action, --prune additionally removes the cupertino auto-base
 DerivedData tree; with --prune and no scheme/destination resolvable, pruning
 runs standalone (no xcodebuild clean)."
   (let* ((path (first (clingon:command-arguments cmd)))
-         (model (model:make-cupertino-model path))
+         (model (or model (model:make-cupertino-model path)))
          (project-flag (resolve-project-flag cmd model))
          (configuration (clingon:getopt cmd :configuration))
          (derived-data-path (clingon:getopt cmd :derived-data))

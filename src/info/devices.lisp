@@ -197,12 +197,78 @@ emptiness check."
 treated as physical so older devicectl payloads still list."
   (not (equal (device-reality device) "simulated")))
 
+(defun device-hardware-udid (device)
+  "Hardware UDID (`hardwareProperties.udid`). This is the id xcodebuild
+matches in `-destination id=`. NIL when the payload has none."
+  (let ((hp (and device (gethash "hardwareProperties" device))))
+    (and hp (gethash "udid" hp))))
+
+(defun device-platform (device)
+  "devicectl platform (`iOS`, `tvOS`, ...), or NIL when absent."
+  (let ((hp (and device (gethash "hardwareProperties" device))))
+    (and hp (gethash "platform" hp))))
+
+(defun coredevice-identifier-p (id)
+  "T when ID is an 8-4-4-4-12 CoreDevice identifier.
+Hardware UDIDs (`00008110-000A7D442E8BA01E`, 40 hex chars) are not this shape,
+so they can be passed to xcodebuild without a devicectl lookup."
+  (and (stringp id)
+       (= (length id) 36)
+       (char= (char id 8) #\-)
+       (char= (char id 13) #\-)
+       (char= (char id 18) #\-)
+       (char= (char id 23) #\-)))
+
+(defun installable-device-p (device)
+  "T when DEVICE is a physical device devicectl can install to.
+`disconnected` and `connecting` are still paired: the tunnel comes up when
+install runs. `unavailable` devices are not reachable."
+  (when (and device (physical-device-p device))
+    (let* ((cp (gethash "connectionProperties" device))
+           (ts (and cp (gethash "tunnelState" cp))))
+      (and ts
+           (member ts '("connected" "disconnected" "connecting")
+                   :test #'string-equal)))))
+
+(defun select-installable-devices (devices)
+  "Installable devices from DEVICES (list or vector), in input order."
+  (let (acc)
+    (map nil
+         (lambda (device)
+           (when (installable-device-p device)
+             (push device acc)))
+         devices)
+    (nreverse acc)))
+
+(defun find-physical-device (device-id devices)
+  "Physical device in DEVICES whose CoreDevice identifier or hardware UDID
+is DEVICE-ID, or NIL."
+  (when (and device-id devices)
+    (block found
+      (map nil
+           (lambda (device)
+             (when (and (physical-device-p device)
+                        (or (equal device-id (gethash "identifier" device))
+                            (equal device-id (device-hardware-udid device))))
+               (return-from found device)))
+           devices))))
+
+(defvar *physical-device-cache* :unbound
+  "Process-wide devicectl device list. :unbound means not fetched yet.")
+
+(defun current-physical-devices ()
+  "Parsed devicectl devices, fetched once per process. NIL when devicectl fails."
+  (when (eq *physical-device-cache* :unbound)
+    (setf *physical-device-cache* (ignore-errors (list-device-info))))
+  *physical-device-cache*)
+
 (defun device-table-row (device)
   "One `info device` table row (list of cell strings/values) for DEVICE."
   (let* ((dev-props (gethash "deviceProperties" device))
          (hardware-props (gethash "hardwareProperties" device))
          (conn-props (gethash "connectionProperties" device))
-         (identifier (and device (gethash "identifier" device)))
+         (identifier (or (device-hardware-udid device)
+                         (and device (gethash "identifier" device))))
          (os-version (and dev-props (gethash "osVersionNumber" dev-props)))
          (hostname (json-seq-first (and conn-props (gethash "potentialHostnames" conn-props))))
          (model (and hardware-props (gethash "marketingName" hardware-props)))

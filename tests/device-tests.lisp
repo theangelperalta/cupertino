@@ -102,3 +102,70 @@
 (deftest list-device-names/empty-input
   (ok (null (cupertino::list-device-names (parse-devicectl-json "[]"))))
   (ok (null (cupertino::list-device-names nil))))
+
+(deftest device-table-row/prefers-hardware-udid
+  (ok (equal "00008110-000A7D442E8BA01E"
+             (fourth
+              (cupertino::device-table-row
+               (parse-devicectl-json
+                "{\"identifier\": \"A57FC5FD-F89F-59C3-8ED7-99B6F03626BD\",
+                  \"hardwareProperties\": {\"udid\": \"00008110-000A7D442E8BA01E\",
+                                           \"platform\": \"iOS\",
+                                           \"reality\": \"physical\"}}"))))))
+
+(deftest coredevice-identifier-p/distinguishes-hardware-udid
+  (ok (cupertino::coredevice-identifier-p "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD"))
+  (ok (not (cupertino::coredevice-identifier-p "00008110-000A7D442E8BA01E")))
+  (ok (not (cupertino::coredevice-identifier-p "UDID9")))
+  (ok (not (cupertino::coredevice-identifier-p nil))))
+
+(deftest installable-device-p/keeps-disconnected-drops-unavailable-and-sims
+  (ok (cupertino::installable-device-p
+       (parse-devicectl-json
+        "{\"hardwareProperties\": {\"reality\": \"physical\"},
+          \"connectionProperties\": {\"tunnelState\": \"disconnected\"}}")))
+  (ok (cupertino::installable-device-p
+       (parse-devicectl-json
+        "{\"hardwareProperties\": {\"reality\": \"physical\"},
+          \"connectionProperties\": {\"tunnelState\": \"connected\"}}")))
+  (ok (not (cupertino::installable-device-p
+            (parse-devicectl-json
+             "{\"hardwareProperties\": {\"reality\": \"physical\"},
+               \"connectionProperties\": {\"tunnelState\": \"unavailable\"}}"))))
+  (ok (not (cupertino::installable-device-p
+            (parse-devicectl-json
+             "{\"hardwareProperties\": {\"reality\": \"simulated\"},
+               \"connectionProperties\": {\"tunnelState\": \"disconnected\"}}")))))
+
+(deftest device-destination/coredevice-identifier-maps-to-hardware-udid
+  (let ((devices (parse-devicectl-json
+                  "[{\"identifier\": \"A57FC5FD-F89F-59C3-8ED7-99B6F03626BD\",
+                     \"hardwareProperties\": {\"udid\": \"00008110-000A7D442E8BA01E\",
+                                              \"platform\": \"iOS\",
+                                              \"reality\": \"physical\"}}]")))
+    (ok (string= "platform=iOS,id=00008110-000A7D442E8BA01E"
+                 (cupertino::device-destination
+                  "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD" devices)))))
+
+(deftest device-destination/hardware-udid-passthrough-skips-lookup
+  (ok (string= "platform=iOS,id=00008110-000A7D442E8BA01E"
+               (cupertino::device-destination "00008110-000A7D442E8BA01E" nil)))
+  (ok (string= "platform=iOS,id=UDID9"
+               (cupertino::parse-cell-destination "device=UDID9"))))
+
+(deftest device-destination/unknown-identifier-falls-back
+  (ok (string= "platform=iOS,id=A57FC5FD-F89F-59C3-8ED7-99B6F03626BD"
+               (cupertino::device-destination
+                "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD" #()))))
+
+(deftest device-sdk/maps-platform
+  (ok (string= "iphoneos" (cupertino::device-sdk "iOS")))
+  (ok (string= "appletvos" (cupertino::device-sdk "tvOS")))
+  (ok (string= "watchos" (cupertino::device-sdk "watchOS")))
+  (ok (string= "iphoneos" (cupertino::device-sdk nil))))
+
+(deftest pin-install-destination/device-clears-simulator
+  (let ((m (make-instance 'model::cupertino-model :sim "SIM" :device "DEV")))
+    (cupertino::pin-install-destination m :device "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD")
+    (ok (null (model:model-sim m)))
+    (ok (string= "A57FC5FD-F89F-59C3-8ED7-99B6F03626BD" (model:model-device m)))))
